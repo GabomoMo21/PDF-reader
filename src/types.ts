@@ -39,6 +39,23 @@ export type ImageAnnotation = {
   mime: 'image/png' | 'image/jpeg'
 }
 
+export type ChartType = 'bar' | 'line' | 'pie'
+export type ChartSeries = { name: string; values: number[] }
+
+export type ChartAnnotation = {
+  id: string
+  kind: 'chart'
+  x: number
+  y: number
+  width: number
+  height: number
+  dataUrl: string
+  chartType: ChartType
+  title: string
+  labels: string[]
+  series: ChartSeries[]
+}
+
 export type ReplaceTextAnnotation = {
   id: string
   kind: 'replaceText'
@@ -51,7 +68,7 @@ export type ReplaceTextAnnotation = {
   size: number
 }
 
-export type Annotation = TextAnnotation | StrokeAnnotation | RectangleAnnotation | ImageAnnotation | ReplaceTextAnnotation
+export type Annotation = TextAnnotation | StrokeAnnotation | RectangleAnnotation | ImageAnnotation | ChartAnnotation | ReplaceTextAnnotation
 
 export type PageState = {
   id: string

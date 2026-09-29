@@ -1,96 +1,56 @@
-# OpenPDF Editor v0.2
+# OpenPDF v0.3
 
-Editor PDF gratuito, local y experimental construido con React + TypeScript, PDF.js, pdf-lib y preparado para Tauri 2.
+Editor PDF local y gratuito construido con React + TypeScript + PDF.js + pdf-lib, preparado también para Tauri 2.
 
-## Qué incluye esta versión
-
-- Abrir y visualizar PDFs localmente.
-- Zoom y navegación por páginas.
-- Reordenar, rotar, duplicar y eliminar páginas.
-- Extraer la página actual a un PDF independiente.
-- Combinar varios PDFs en un solo documento y continuar editándolo.
-- Añadir texto nuevo.
-- **Editar visualmente texto existente:** OpenPDF detecta bloques de texto mediante PDF.js; permite sustituirlos u ocultarlos y guarda el cambio superponiendo contenido nuevo.
-- Resaltar áreas.
-- Dibujar a mano alzada / firma rápida.
-- Insertar imágenes PNG/JPG.
-- Detectar y rellenar formularios AcroForm compatibles.
-- Marcar áreas para redacción.
-- Guardar el resultado como un PDF nuevo.
-
-## Importante sobre "Editar texto"
-
-La v0.2 todavía no reescribe los `content streams` del PDF como un editor de maquetación completo. Para ofrecer una edición útil desde ya, detecta el bloque original, lo cubre y coloca el texto nuevo encima. Es ideal para correcciones cortas, nombres, números y frases pequeñas.
-
-La futura capa de edición avanzada deberá reconstruir líneas/párrafos, conservar fuentes incrustadas y modificar directamente los operadores de contenido del PDF.
-
-## Importante sobre redacción
-
-**La herramienta Redactar de v0.2 es solamente visual.** No debe utilizarse todavía para información confidencial. Un rectángulo negro puede ocultar el contenido a simple vista, pero el texto subyacente puede seguir presente en el archivo.
-
-La siguiente etapa implementará redacción segura rasterizando o reconstruyendo las páginas afectadas antes de guardar, de forma que el contenido oculto no pueda recuperarse mediante selección/extracción de texto.
-
-## Ejecutar en Windows
-
-Necesitas Node.js 20.19+ (o una versión moderna de Node 22).
-
-Desde PowerShell en esta carpeta:
+## Ejecutar
 
 ```powershell
 npm install
 npm run dev
 ```
 
-O ejecuta:
+Después abre la dirección que muestre Vite (normalmente `http://localhost:1420`).
+
+## Novedades de v0.3
+
+- Selección de objetos con el cursor.
+- Arrastrar objetos insertados o editados.
+- Redimensionar imágenes, gráficos, resaltados, redacciones y texto reemplazado.
+- Eliminar objetos seleccionados con el botón contextual o `Delete/Supr`.
+- Undo/Redo real para cambios en páginas y objetos (`Ctrl+Z`, `Ctrl+Y`).
+- División del PDF por grupos de rangos, por ejemplo `1-3; 4-6; 8,10-12`.
+- Gráficos de barras, líneas y pastel a partir de datos pegados desde Excel/CSV.
+- Detección experimental de tablas/columnas en la página actual para precargar los datos del gráfico.
+- Redacción segura al exportar: las páginas que contienen zonas redactadas se rasterizan después de aplicar las ediciones, por lo que el contenido original situado debajo no se conserva en esas páginas del PDF final.
+
+## Importante sobre la redacción segura
+
+La seguridad se obtiene reconstruyendo como imagen las páginas que contienen redacciones. Esto elimina de esas páginas el texto y los objetos PDF subyacentes, pero también hace que el texto de esas páginas deje de ser seleccionable/buscable y que los elementos vectoriales se conviertan en píxeles.
+
+## Gráficos
+
+Pulsa **Gráfico** y pega una tabla como esta:
 
 ```text
-run_dev.bat
+Mes\tVentas\tCostos
+Enero\t120\t80
+Febrero\t180\t105
+Marzo\t155\t95
 ```
 
-Abre la dirección que muestre Vite, normalmente:
+También puedes copiar directamente un rango de Excel y pegarlo en el cuadro de datos. La primera columna se usa como categoría y las siguientes como series numéricas.
 
-```text
-http://localhost:1420/
-```
+El botón **Detectar tabla de esta página** intenta agrupar texto por filas y columnas usando las coordenadas que entrega PDF.js. Es una heurística: funciona bien con tablas sencillas, pero debes revisar los datos antes de crear el gráfico.
 
-## Ejecutar como aplicación Tauri
+## Limitación importante de edición de texto
 
-Para Tauri también necesitas Rust y las Build Tools de Visual Studio para C++.
+La edición de texto existente sigue funcionando como reemplazo visual del bloque detectado. Todavía no reconstruye el `content stream` ni hace reflow de párrafos como un procesador de texto. Esa será una fase posterior.
+
+## Build de escritorio con Tauri
+
+Con Rust y los requisitos de Tauri instalados:
 
 ```powershell
-npm install
 npm run tauri dev
-```
-
-Para compilar instaladores:
-
-```powershell
 npm run tauri build
 ```
-
-## Hoja de ruta
-
-### v0.3
-- Redacción segura real.
-- Seleccionar, mover, redimensionar y eliminar objetos agregados.
-- Historial Undo/Redo completo.
-- Guardar rangos de páginas / dividir PDF.
-- Miniaturas reales de páginas.
-
-### v0.4
-- OCR local para documentos escaneados.
-- Crear una capa de texto buscable sobre escaneos.
-- Edición de texto asistida por OCR.
-- Panel de propiedades: fuente, tamaño, color, alineación y opacidad.
-
-### v0.5+
-- Edición avanzada de `content streams`.
-- Reconstrucción de párrafos y ajuste automático de línea.
-- Fuentes incrustadas y sustitución inteligente de fuentes.
-- Firmas digitales criptográficas.
-- PDF/A y herramientas de accesibilidad.
-- Comparación de documentos.
-
-## Privacidad
-
-El editor está pensado para funcionar localmente. La apertura, renderizado y exportación del PDF no requieren enviar el documento a un servidor.
