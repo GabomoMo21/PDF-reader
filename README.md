@@ -1,75 +1,96 @@
-# OpenPDF Editor
+# OpenPDF Editor v0.2
 
-Primera versión funcional de un editor PDF gratuito y local.
+Editor PDF gratuito, local y experimental construido con React + TypeScript, PDF.js, pdf-lib y preparado para Tauri 2.
 
-## Funciones actuales
+## Qué incluye esta versión
 
-- Abrir PDFs desde el equipo.
-- Visualizar todas las páginas.
-- Zoom.
-- Insertar texto haciendo clic sobre la página.
-- Dibujar a mano alzada.
-- Deshacer la última anotación de la página.
-- Rotar páginas.
-- Eliminar páginas.
-- Reordenar páginas.
-- Guardar un PDF nuevo con los cambios aplicados.
-- Procesamiento local: el documento no se sube a ningún servidor.
+- Abrir y visualizar PDFs localmente.
+- Zoom y navegación por páginas.
+- Reordenar, rotar, duplicar y eliminar páginas.
+- Extraer la página actual a un PDF independiente.
+- Combinar varios PDFs en un solo documento y continuar editándolo.
+- Añadir texto nuevo.
+- **Editar visualmente texto existente:** OpenPDF detecta bloques de texto mediante PDF.js; permite sustituirlos u ocultarlos y guarda el cambio superponiendo contenido nuevo.
+- Resaltar áreas.
+- Dibujar a mano alzada / firma rápida.
+- Insertar imágenes PNG/JPG.
+- Detectar y rellenar formularios AcroForm compatibles.
+- Marcar áreas para redacción.
+- Guardar el resultado como un PDF nuevo.
 
-## Limitación importante de esta versión
+## Importante sobre "Editar texto"
 
-Todavía no edita directamente los objetos de texto que ya existen dentro del PDF. La edición de texto PDF existente requiere reconstrucción de fuentes, operadores de contenido, posiciones y, en ciertos documentos, OCR. Esta función pertenece a la siguiente fase.
+La v0.2 todavía no reescribe los `content streams` del PDF como un editor de maquetación completo. Para ofrecer una edición útil desde ya, detecta el bloque original, lo cubre y coloca el texto nuevo encima. Es ideal para correcciones cortas, nombres, números y frases pequeñas.
 
-## Ejecutar ahora mismo en Windows (modo desarrollo)
+La futura capa de edición avanzada deberá reconstruir líneas/párrafos, conservar fuentes incrustadas y modificar directamente los operadores de contenido del PDF.
 
-Instala Node.js 20+ y después abre PowerShell dentro de esta carpeta:
+## Importante sobre redacción
+
+**La herramienta Redactar de v0.2 es solamente visual.** No debe utilizarse todavía para información confidencial. Un rectángulo negro puede ocultar el contenido a simple vista, pero el texto subyacente puede seguir presente en el archivo.
+
+La siguiente etapa implementará redacción segura rasterizando o reconstruyendo las páginas afectadas antes de guardar, de forma que el contenido oculto no pueda recuperarse mediante selección/extracción de texto.
+
+## Ejecutar en Windows
+
+Necesitas Node.js 20.19+ (o una versión moderna de Node 22).
+
+Desde PowerShell en esta carpeta:
 
 ```powershell
 npm install
 npm run dev
 ```
 
-Abre la dirección que muestra Vite (normalmente `http://localhost:1420`).
+O ejecuta:
+
+```text
+run_dev.bat
+```
+
+Abre la dirección que muestre Vite, normalmente:
+
+```text
+http://localhost:1420/
+```
 
 ## Ejecutar como aplicación Tauri
 
-Para compilar la aplicación de escritorio también necesitas:
-
-1. Rust (rustup)
-2. Microsoft C++ Build Tools / Visual Studio Build Tools con "Desktop development with C++"
-3. WebView2 (incluido normalmente en Windows 10/11)
-
-Luego:
+Para Tauri también necesitas Rust y las Build Tools de Visual Studio para C++.
 
 ```powershell
 npm install
 npm run tauri dev
 ```
 
-Para crear un instalador:
+Para compilar instaladores:
 
 ```powershell
 npm run tauri build
 ```
 
-El instalador aparecerá dentro de `src-tauri/target/release/bundle/`.
+## Hoja de ruta
 
-## Arquitectura
+### v0.3
+- Redacción segura real.
+- Seleccionar, mover, redimensionar y eliminar objetos agregados.
+- Historial Undo/Redo completo.
+- Guardar rangos de páginas / dividir PDF.
+- Miniaturas reales de páginas.
 
-- React + TypeScript: interfaz.
-- PDF.js (`pdfjs-dist`): renderizado/lectura del PDF.
-- pdf-lib: escritura y modificación del archivo PDF.
-- Tauri 2: empaquetado como aplicación nativa de escritorio.
+### v0.4
+- OCR local para documentos escaneados.
+- Crear una capa de texto buscable sobre escaneos.
+- Edición de texto asistida por OCR.
+- Panel de propiedades: fuente, tamaño, color, alineación y opacidad.
 
-## Próximos pasos sugeridos
+### v0.5+
+- Edición avanzada de `content streams`.
+- Reconstrucción de párrafos y ajuste automático de línea.
+- Fuentes incrustadas y sustitución inteligente de fuentes.
+- Firmas digitales criptográficas.
+- PDF/A y herramientas de accesibilidad.
+- Comparación de documentos.
 
-1. Seleccionar/mover/editar anotaciones ya agregadas.
-2. Insertar imágenes.
-3. Resaltador y figuras.
-4. Miniaturas reales de cada página.
-5. Guardar con diálogo nativo de Windows.
-6. Combinar y dividir PDFs.
-7. Formularios PDF.
-8. OCR para documentos escaneados.
-9. Edición real de texto ya existente.
-10. Firmas digitales y redacción segura.
+## Privacidad
+
+El editor está pensado para funcionar localmente. La apertura, renderizado y exportación del PDF no requieren enviar el documento a un servidor.
