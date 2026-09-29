@@ -160,3 +160,33 @@ button, input, select { font: inherit; }
   .ocr-footer button { flex: 1; }
   .sheet td input { width: 120px; }
 }
+
+/* v0.5 smart content + navigation */
+.page-jump { display:flex; align-items:center; gap:5px; color:#aeb5c0; font-size:12px; white-space:nowrap; }
+.page-jump input { width:48px; padding:5px 4px; border:1px solid #343841; border-radius:6px; background:#24272d; color:#fff; text-align:center; }
+.scroll-toggle { font-size:11px; }
+.scroll-toggle.active { border-color:#486b55; background:#223329; color:#bde0c7; }
+.smart-overlay { position:absolute; inset:0; z-index:12; pointer-events:none; }
+.smart-block { position:absolute; min-width:12px; min-height:12px; padding:0; border:1.5px dashed rgba(53,133,255,.8); background:rgba(53,133,255,.055); color:#185dba; pointer-events:auto; cursor:pointer; }
+.smart-block > span { position:absolute; left:-1px; top:-20px; max-width:180px; padding:2px 6px; border-radius:4px 4px 4px 0; background:#256bd0; color:#fff; font-size:10px; line-height:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.smart-block.selected { border:2px solid #ef6b58; background:rgba(239,107,88,.09); box-shadow:0 0 0 2px rgba(255,255,255,.7) inset; }
+.smart-block.selected > span { background:#df5948; }
+.smart-table { border-color:rgba(70,165,104,.95); background:rgba(70,165,104,.07); }
+.smart-table > span { background:#347a4d; }
+.smart-image, .smart-chart { border-color:rgba(159,97,214,.95); background:rgba(159,97,214,.07); }
+.smart-image > span, .smart-chart > span { background:#7c4aa8; }
+.smart-signature { border-color:rgba(217,139,49,.95); background:rgba(217,139,49,.07); }
+.smart-signature > span { background:#a76723; }
+.smart-card { position:absolute; z-index:40; right:10px; top:10px; width:min(310px,calc(100% - 20px)); padding:10px; border:1px solid #cfd5de; border-radius:9px; background:rgba(255,255,255,.97); color:#2a2f37; box-shadow:0 8px 28px rgba(0,0,0,.22); pointer-events:auto; }
+.smart-card-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.smart-card-head strong { font-size:13px; }
+.smart-card-head button { width:24px; height:24px; border:0; background:transparent; color:#555d68; cursor:pointer; font-size:18px; }
+.smart-card p { margin:8px 0; color:#5a626e; font-size:11px; line-height:1.35; }
+.smart-card-actions { display:flex; flex-wrap:wrap; gap:6px; }
+.smart-card-actions button { padding:6px 8px; border:1px solid #d0d5dc; border-radius:6px; background:#f3f5f7; color:#28313d; cursor:pointer; font-size:11px; }
+.smart-card-actions button:first-child { border-color:#e66c5b; background:#ef6a58; color:#fff; }
+.document-stage { overscroll-behavior: contain; scroll-behavior: smooth; }
+@media (max-width: 900px) {
+  .page-jump span { display:none; }
+  .scroll-toggle { display:none; }
+}

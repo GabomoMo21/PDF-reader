@@ -27,6 +27,21 @@ type TableDetection = {
   message: string
 }
 
+type SmartKind = 'title' | 'paragraph' | 'table' | 'list' | 'header' | 'footer' | 'image' | 'chart' | 'signature'
+type SmartBlock = {
+  id: string
+  kind: SmartKind
+  label: string
+  rect: Rect
+  text?: string
+  source: 'pdf' | 'ocr' | 'annotation' | 'image-op'
+  annotationId?: string
+}
+
+const smartKindLabel: Record<SmartKind,string> = {
+  title:'Título', paragraph:'Párrafo', table:'Tabla', list:'Lista', header:'Encabezado', footer:'Pie de página', image:'Imagen', chart:'Gráfico', signature:'Firma / dibujo'
+}
+
 function downloadBytes(bytes: Uint8Array, fileName: string) {
   const blob = new Blob([bytes], { type: 'application/pdf' })
   const url = URL.createObjectURL(blob)
@@ -235,6 +250,136 @@ function detectTableGrid(items: ExistingTextItem[]): TableDetection | null {
   return {grid:normalizeGrid(finalGrid).slice(0,60),confidence,message:`${finalGrid.length} filas · ${keepCols.length} columnas · confianza ${confidence}%`}
 }
 
+
+function smartRectFromItems(items: ExistingTextItem[], pageWidth: number, pageHeight: number): Rect {
+  const left=Math.min(...items.map(i=>i.x)), top=Math.min(...items.map(i=>i.y))
+  const right=Math.max(...items.map(i=>i.x+i.width)), bottom=Math.max(...items.map(i=>i.y+i.height))
+  return {x:clamp(left/pageWidth),y:clamp(top/pageHeight),width:clamp((right-left)/pageWidth,.003,1),height:clamp((bottom-top)/pageHeight,.003,1)}
+}
+
+function buildTextLines(items: ExistingTextItem[]) {
+  const usable=items.filter(i=>i.text.trim())
+  if(!usable.length)return [] as {items:ExistingTextItem[];text:string;rect:Rect;font:number;y:number}[]
+  const med=Math.max(8,median(usable.map(i=>i.height)))
+  const tol=Math.max(5,med*.55)
+  const rows:{y:number;items:ExistingTextItem[]}[]=[]
+  for(const item of [...usable].sort((a,b)=>(a.y+a.height/2)-(b.y+b.height/2)||a.x-b.x)){
+    const cy=item.y+item.height/2
+    let best=rows.reduce<{row:{y:number;items:ExistingTextItem[]}|null;d:number}>((acc,row)=>{const d=Math.abs(row.y-cy);return d<acc.d?{row,d}:acc},{row:null,d:Infinity})
+    if(!best.row||best.d>tol)rows.push({y:cy,items:[item]})
+    else{best.row.items.push(item);best.row.y=best.row.items.reduce((sum,x)=>sum+x.y+x.height/2,0)/best.row.items.length}
+  }
+  return rows.sort((a,b)=>a.y-b.y).map(row=>{
+    row.items.sort((a,b)=>a.x-b.x)
+    const left=Math.min(...row.items.map(i=>i.x)), top=Math.min(...row.items.map(i=>i.y))
+    const right=Math.max(...row.items.map(i=>i.x+i.width)), bottom=Math.max(...row.items.map(i=>i.y+i.height))
+    return {items:row.items,text:row.items.map(i=>i.text).join(' ').replace(/\s+/g,' ').trim(),rect:{x:left,y:top,width:right-left,height:bottom-top},font:median(row.items.map(i=>i.fontSize)),y:row.y}
+  })
+}
+
+function detectSmartTextBlocks(items: ExistingTextItem[], pageWidth:number, pageHeight:number): SmartBlock[] {
+  if(!items.length||pageWidth<=1||pageHeight<=1)return []
+  const lines=buildTextLines(items)
+  if(!lines.length)return []
+  const medFont=Math.max(7,median(items.map(i=>i.fontSize)))
+  const blocks:SmartBlock[]=[]
+  const consumed=new Set<number>()
+
+  // Header/footer are useful because users often want to edit or remove them as a unit.
+  lines.forEach((line,i)=>{
+    const top=line.rect.y/pageHeight, bottom=(line.rect.y+line.rect.height)/pageHeight
+    if(top<.075 && line.text.length>1){blocks.push({id:`smart-header-${i}`,kind:'header',label:'Encabezado',rect:smartRectFromItems(line.items,pageWidth,pageHeight),text:line.text,source:items[0]?.source==='ocr'?'ocr':'pdf'});consumed.add(i)}
+    else if(bottom>.925 && line.text.length>1){blocks.push({id:`smart-footer-${i}`,kind:'footer',label:'Pie de página',rect:smartRectFromItems(line.items,pageWidth,pageHeight),text:line.text,source:items[0]?.source==='ocr'?'ocr':'pdf'});consumed.add(i)}
+  })
+
+  // Titles: substantially larger than the median body text, reasonably short, and not in footer/header.
+  lines.forEach((line,i)=>{
+    if(consumed.has(i))return
+    if(line.font>=medFont*1.28 && line.text.length<=150){blocks.push({id:`smart-title-${i}`,kind:'title',label:'Título',rect:smartRectFromItems(line.items,pageWidth,pageHeight),text:line.text,source:items[0]?.source==='ocr'?'ocr':'pdf'});consumed.add(i)}
+  })
+
+  // Lists: consecutive lines sharing bullet/number prefixes or strongly aligned indents.
+  const isList=(t:string)=>/^\s*(?:[•▪◦·\-*–—]|\(?\d+[.)]|[A-Za-z][.)])\s+/.test(t)
+  for(let i=0;i<lines.length;){
+    if(consumed.has(i)||!isList(lines[i].text)){i++;continue}
+    const group=[i];let j=i+1
+    while(j<lines.length&&!consumed.has(j)&&isList(lines[j].text)&&Math.abs(lines[j].rect.x-lines[i].rect.x)<medFont*2.2){group.push(j);j++}
+    if(group.length>=2){const groupItems=group.flatMap(k=>lines[k].items);blocks.push({id:`smart-list-${i}`,kind:'list',label:'Lista',rect:smartRectFromItems(groupItems,pageWidth,pageHeight),text:group.map(k=>lines[k].text).join('\n'),source:items[0]?.source==='ocr'?'ocr':'pdf'});group.forEach(k=>consumed.add(k))}
+    i=Math.max(i+1,j)
+  }
+
+  // Table candidate: several nearby rows with multiple cells, repeated horizontal anchors and numeric content.
+  const tableRows:number[]=[]
+  lines.forEach((line,i)=>{
+    if(consumed.has(i))return
+    const numeric=line.items.filter(it=>parseNumber(it.text)!==null).length
+    if(line.items.length>=2 && (numeric>=1 || line.items.length>=3))tableRows.push(i)
+  })
+  if(tableRows.length>=2){
+    let best:number[]=[];let cur:number[]=[]
+    for(const i of tableRows){if(!cur.length||i-cur[cur.length-1]<=2)cur.push(i);else{if(cur.length>best.length)best=cur;cur=[i]}}
+    if(cur.length>best.length)best=cur
+    if(best.length>=2){
+      const tableItems=best.flatMap(k=>lines[k].items)
+      const detected=detectTableGrid(tableItems)
+      if(detected&&detected.grid.length>=2){blocks.push({id:'smart-table-main',kind:'table',label:`Tabla · ${detected.grid.length}×${detected.grid[0]?.length||0}`,rect:smartRectFromItems(tableItems,pageWidth,pageHeight),text:detected.message,source:items[0]?.source==='ocr'?'ocr':'pdf'});best.forEach(k=>consumed.add(k))}
+    }
+  }
+
+  // Remaining adjacent body lines become paragraphs.
+  for(let i=0;i<lines.length;){
+    if(consumed.has(i)){i++;continue}
+    const group=[i];let j=i+1
+    while(j<lines.length&&!consumed.has(j)){
+      const prev=lines[j-1], cur=lines[j]
+      const gap=cur.rect.y-(prev.rect.y+prev.rect.height)
+      const aligned=Math.abs(cur.rect.x-prev.rect.x)<medFont*2.5
+      if(gap>medFont*1.65||!aligned||cur.font>medFont*1.25)break
+      group.push(j);j++
+    }
+    const groupItems=group.flatMap(k=>lines[k].items)
+    const text=group.map(k=>lines[k].text).join(' ')
+    if(text.trim().length>3)blocks.push({id:`smart-paragraph-${i}`,kind:'paragraph',label:'Párrafo',rect:smartRectFromItems(groupItems,pageWidth,pageHeight),text,source:items[0]?.source==='ocr'?'ocr':'pdf'})
+    i=Math.max(i+1,j)
+  }
+  return blocks
+}
+
+function annotationSmartBlocks(page:PageState):SmartBlock[]{
+  const blocks:SmartBlock[]=[]
+  for(const a of page.annotations){
+    if(a.kind==='image')blocks.push({id:`smart-ann-${a.id}`,kind:'image',label:'Imagen insertada',rect:{x:a.x,y:a.y,width:a.width,height:a.height},source:'annotation',annotationId:a.id})
+    else if(a.kind==='chart')blocks.push({id:`smart-ann-${a.id}`,kind:'chart',label:a.title||'Gráfico',rect:{x:a.x,y:a.y,width:a.width,height:a.height},source:'annotation',annotationId:a.id})
+    else if(a.kind==='stroke'&&a.points.length){const xs=a.points.map(p=>p.x),ys=a.points.map(p=>p.y),x=Math.min(...xs),y=Math.min(...ys),right=Math.max(...xs),bottom=Math.max(...ys);blocks.push({id:`smart-ann-${a.id}`,kind:'signature',label:'Firma / dibujo',rect:{x,y,width:Math.max(.01,right-x),height:Math.max(.01,bottom-y)},source:'annotation',annotationId:a.id})}
+  }
+  return blocks
+}
+
+function multiplyMatrix(a:number[],b:number[]){return [a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5]]}
+function transformPoint(m:number[],x:number,y:number){return {x:m[0]*x+m[2]*y+m[4],y:m[1]*x+m[3]*y+m[5]}}
+
+async function detectPdfImageBlocks(page:pdfjsLib.PDFPageProxy, viewport:any):Promise<SmartBlock[]> {
+  try{
+    const ops=await page.getOperatorList(), OPS=(pdfjsLib as any).OPS
+    let ctm=[1,0,0,1,0,0], stack:number[][]=[], n=0
+    const out:SmartBlock[]=[]
+    for(let i=0;i<ops.fnArray.length;i++){
+      const fn=ops.fnArray[i], args=ops.argsArray[i] as any[]
+      if(fn===OPS.save)stack.push([...ctm])
+      else if(fn===OPS.restore)ctm=stack.pop()??ctm
+      else if(fn===OPS.transform&&args?.length>=6)ctm=multiplyMatrix(ctm,args.slice(0,6).map(Number))
+      else if(fn===OPS.paintImageXObject||fn===OPS.paintInlineImageXObject||fn===OPS.paintJpegXObject){
+        const m=multiplyMatrix(viewport.transform,ctm)
+        const pts=[transformPoint(m,0,0),transformPoint(m,1,0),transformPoint(m,0,1),transformPoint(m,1,1)]
+        const left=Math.min(...pts.map(p=>p.x)),right=Math.max(...pts.map(p=>p.x)),top=Math.min(...pts.map(p=>p.y)),bottom=Math.max(...pts.map(p=>p.y))
+        const rect={x:clamp(left/viewport.width),y:clamp(top/viewport.height),width:clamp((right-left)/viewport.width,0,1),height:clamp((bottom-top)/viewport.height,0,1)}
+        if(rect.width>.025&&rect.height>.025)out.push({id:`smart-pdf-image-${n++}`,kind:'image',label:'Imagen del PDF',rect,source:'image-op'})
+      }
+    }
+    return out
+  }catch{return []}
+}
+
 function parseOcrTsv(tsv:string, canvasWidth:number, canvasHeight:number): OcrWord[] {
   const lines=tsv.split(/\r?\n/)
   if(lines.length<2)return[]
@@ -258,7 +403,8 @@ function parseOcrTsv(tsv:string, canvasWidth:number, canvasHeight:number): OcrWo
 
 export default function App() {
   const fileInputRef=useRef<HTMLInputElement>(null), combineInputRef=useRef<HTMLInputElement>(null), imageInputRef=useRef<HTMLInputElement>(null)
-  const canvasRef=useRef<HTMLCanvasElement>(null), pageHostRef=useRef<HTMLDivElement>(null)
+  const canvasRef=useRef<HTMLCanvasElement>(null), pageHostRef=useRef<HTMLDivElement>(null), documentStageRef=useRef<HTMLDivElement>(null)
+  const pendingScrollEdgeRef=useRef<'top'|'bottom'|null>(null), wheelFlipLockRef=useRef(0)
   const [fileName,setFileName]=useState(''), [sourceBytes,setSourceBytes]=useState<Uint8Array|null>(null), [pdf,setPdf]=useState<pdfjsLib.PDFDocumentProxy|null>(null)
   const [pages,setPages]=useState<PageState[]>([]), [past,setPast]=useState<PageState[][]>([]), [future,setFuture]=useState<PageState[][]>([])
   const [pageIndex,setPageIndex]=useState(0), [tool,setTool]=useState<ToolMode>('select'), [zoom,setZoom]=useState(1.15)
@@ -271,6 +417,8 @@ export default function App() {
   const [showOcr,setShowOcr]=useState(false), [ocrLanguage,setOcrLanguage]=useState('spa+eng'), [ocrBusy,setOcrBusy]=useState(false), [ocrProgress,setOcrProgress]=useState(0), [ocrProgressText,setOcrProgressText]=useState(''), [showOcrBoxes,setShowOcrBoxes]=useState(false)
   const [selectedId,setSelectedId]=useState<string|null>(null)
   const [objectDrag,setObjectDrag]=useState<{id:string;mode:'move'|'resize';start:Point;original:Annotation;before:PageState[];changed:boolean}|null>(null)
+  const [smartMode,setSmartMode]=useState(false), [smartBlocks,setSmartBlocks]=useState<SmartBlock[]>([]), [smartSelectedId,setSmartSelectedId]=useState<string|null>(null), [smartBusy,setSmartBusy]=useState(false)
+  const [wheelPageTurn,setWheelPageTurn]=useState(true)
   const currentPage=pages[pageIndex]
 
   const commitPages=(next:PageState[]|((old:PageState[])=>PageState[]))=>{
@@ -295,6 +443,12 @@ export default function App() {
     return()=>{cancelled=true}
   },[pdf,currentPage?.sourceIndex,currentPage?.rotationDelta,pageIndex,zoom])
 
+  useEffect(()=>{
+    const stage=documentStageRef.current, edge=pendingScrollEdgeRef.current
+    if(!stage||!edge)return
+    requestAnimationFrame(()=>{stage.scrollTop=edge==='bottom'?stage.scrollHeight:0;pendingScrollEdgeRef.current=null})
+  },[pageIndex,viewportSize.height,zoom])
+
   useEffect(()=>{setSelectedId(null)},[pageIndex])
   useEffect(()=>{
     const handler=(e:KeyboardEvent)=>{
@@ -303,6 +457,10 @@ export default function App() {
       if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo()}
       else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'){e.preventDefault();redo()}
       else if((e.key==='Delete'||e.key==='Backspace')&&selectedId){e.preventDefault();deleteSelected()}
+      else if(e.key==='PageDown'&&pdf){e.preventDefault();navigatePage(pageIndex+1,'top')}
+      else if(e.key==='PageUp'&&pdf){e.preventDefault();navigatePage(pageIndex-1,'bottom')}
+      else if(e.key==='Home'&&pdf){e.preventDefault();navigatePage(0,'top')}
+      else if(e.key==='End'&&pdf){e.preventDefault();navigatePage(pages.length-1,'top')}
     }
     window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler)
   })
@@ -316,6 +474,30 @@ export default function App() {
 
   const undo=()=>{if(!past.length)return;const prev=past[past.length-1];setFuture(f=>[clone(pages),...f].slice(0,60));setPast(p=>p.slice(0,-1));setPages(clone(prev));setSelectedId(null)}
   const redo=()=>{if(!future.length)return;const next=future[0];setPast(p=>[...p,clone(pages)].slice(-60));setFuture(f=>f.slice(1));setPages(clone(next));setSelectedId(null)}
+  const navigatePage=(target:number,edge:'top'|'bottom'='top')=>{
+    if(!pages.length)return
+    const next=Math.max(0,Math.min(target,pages.length-1))
+    if(next===pageIndex)return
+    pendingScrollEdgeRef.current=edge;setPageIndex(next);setSelectedId(null);setSmartSelectedId(null)
+  }
+  const onStageWheel=(e:React.WheelEvent<HTMLDivElement>)=>{
+    if(!pdf)return
+    if(e.ctrlKey||e.metaKey){e.preventDefault();setZoom(z=>Math.max(.5,Math.min(2.5,+(z+(e.deltaY<0?.1:-.1)).toFixed(2))));return}
+    if(!wheelPageTurn)return
+    const stage=e.currentTarget, now=Date.now()
+    if(now-wheelFlipLockRef.current<320)return
+    const atTop=stage.scrollTop<=2, atBottom=stage.scrollTop+stage.clientHeight>=stage.scrollHeight-2
+    if(e.deltaY>25&&atBottom&&pageIndex<pages.length-1){e.preventDefault();wheelFlipLockRef.current=now;navigatePage(pageIndex+1,'top')}
+    else if(e.deltaY<-25&&atTop&&pageIndex>0){e.preventDefault();wheelFlipLockRef.current=now;navigatePage(pageIndex-1,'bottom')}
+  }
+  const fitWidth=async()=>{
+    if(!pdf||!currentPage||!documentStageRef.current)return
+    const page=await pdf.getPage(currentPage.sourceIndex+1)
+    const base=page.getViewport({scale:1,rotation:(page.rotate||0)+currentPage.rotationDelta})
+    const usable=Math.max(320,documentStageRef.current.clientWidth-76)
+    setZoom(Math.max(.5,Math.min(2.5,+(usable/base.width).toFixed(2))))
+  }
+
   const rotate=()=>updateCurrentPage(p=>({...p,rotationDelta:(p.rotationDelta+90)%360}))
   const removeCurrent=()=>{if(pages.length<=1)return;commitPages(pages.filter((_,i)=>i!==pageIndex));setPageIndex(i=>Math.max(0,Math.min(i,pages.length-2)))}
   const duplicateCurrent=()=>{if(!currentPage)return;const cp:PageState={...clone(currentPage),id:uid(),annotations:currentPage.annotations.map(a=>({...clone(a),id:uid()})),ocrWords:currentPage.ocrWords?.map(w=>({...w,id:uid()}))};commitPages([...pages.slice(0,pageIndex+1),cp,...pages.slice(pageIndex+1)]);setPageIndex(pageIndex+1)}
@@ -443,6 +625,40 @@ export default function App() {
   const clearOcrCurrent=()=>{if(!currentPage)return;updateCurrentPage(p=>({...p,ocrWords:[],ocrLanguage:undefined}));setStatus('Capa OCR eliminada de esta página')}
   const copyOcrToTable=()=>{if(!ocrDisplayItems.length){setStatus('Primero ejecuta OCR en esta página');return}setShowChart(true);setTimeout(()=>detectTable('ocr'),0)}
 
+  const runSmartAnalysis=async()=>{
+    if(!pdf||!currentPage)return
+    setSmartBusy(true);setStatus('Analizando estructura de la página…')
+    try{
+      const sourceItems=textItems.length>=3?textItems:ocrDisplayItems
+      const textBlocks=detectSmartTextBlocks(sourceItems,viewportSize.width,viewportSize.height)
+      const page=await pdf.getPage(currentPage.sourceIndex+1)
+      const viewport=page.getViewport({scale:zoom,rotation:(page.rotate||0)+currentPage.rotationDelta})
+      const imageBlocks=await detectPdfImageBlocks(page,viewport)
+      const all=[...textBlocks,...imageBlocks,...annotationSmartBlocks(currentPage)]
+      setSmartBlocks(all);setSmartMode(true);setSmartSelectedId(all[0]?.id??null)
+      const counts=all.reduce<Record<string,number>>((acc,b)=>(acc[b.kind]=(acc[b.kind]||0)+1,acc),{})
+      const summary=Object.entries(counts).map(([k,v])=>`${v} ${smartKindLabel[k as SmartKind].toLowerCase()}`).join(' · ')
+      setStatus(all.length?`Contenido detectado: ${summary}`:'No encontré bloques estructurados claros en esta página')
+    }catch(e){console.error(e);setStatus('No se pudo analizar la estructura de esta página')}
+    finally{setSmartBusy(false)}
+  }
+  const closeSmart=()=>{setSmartMode(false);setSmartSelectedId(null)}
+  const smartSelected=smartBlocks.find(b=>b.id===smartSelectedId)??null
+  const smartAction=()=>{
+    if(!smartSelected)return
+    if(smartSelected.kind==='table'){setShowChart(true);setTimeout(()=>detectTable(smartSelected.source==='ocr'?'ocr':'auto'),0);closeSmart();return}
+    if(smartSelected.annotationId){setTool('select');setSelectedId(smartSelected.annotationId);closeSmart();setStatus(`${smartSelected.label} seleccionado. Puedes moverlo, redimensionarlo o eliminarlo.`);return}
+    if(['title','paragraph','list','header','footer'].includes(smartSelected.kind)){setToolAndStatus('editText');closeSmart();return}
+    if(smartSelected.kind==='image'){setToolAndStatus('redact');closeSmart();setStatus('Imagen detectada: arrastra una redacción sobre ella para eliminarla de forma segura al guardar.')}
+  }
+  const copyDetectedTable=async()=>{
+    const candidates=(smartSelected?.source==='ocr'?ocrDisplayItems:textItems)
+    const detected=detectTableGrid(candidates)
+    if(!detected){setStatus('No pude reconstruir la tabla seleccionada');return}
+    const tsv=gridToTsv(detected.grid)
+    try{await navigator.clipboard.writeText(tsv);setStatus('Tabla copiada al portapapeles en formato compatible con Excel')}catch{window.prompt('Copia estos datos:',tsv)}
+  }
+
   const setToolAndStatus=(next:ToolMode)=>{setTool(next);setSelectedId(null);if(next==='editText')setStatus(textItems.length>=3?'Haz clic sobre un bloque de texto existente para reemplazarlo':'Haz clic sobre una palabra OCR para corregirla');else if(next==='highlight')setStatus('Arrastra sobre el área que quieres resaltar');else if(next==='draw')setStatus('Dibuja directamente sobre el documento. También sirve para una firma rápida.');else if(next==='redact')setStatus('Arrastra sobre lo que quieras eliminar. Al guardar, las páginas redactadas se rasterizan para quitar el contenido original.');else if(next==='image')imageInputRef.current?.click();else setStatus('Cursor: selecciona objetos para moverlos, redimensionarlos o eliminarlos.')}
 
   const strokeElements=useMemo(()=>{if(!currentPage)return null;const strokes=currentPage.annotations.filter(a=>a.kind==='stroke');const all=drawing?[...strokes,{id:'preview',kind:'stroke' as const,points:drawing,width:2}]:strokes;return all.map(a=><polyline key={a.id} points={a.points.map(p=>`${p.x*viewportSize.width},${p.y*viewportSize.height}`).join(' ')} fill="none" stroke="currentColor" strokeWidth={a.width*zoom} strokeLinecap="round" strokeLinejoin="round" className={tool==='select'&&a.id!=='preview'?`stroke-object ${selectedId===a.id?'selected':''}`:''} onPointerDown={tool==='select'&&a.id!=='preview'?(e)=>startObjectDrag(e,a.id,'move'):undefined}/> )},[currentPage,drawing,viewportSize,zoom,tool,selectedId])
@@ -459,24 +675,27 @@ export default function App() {
     return <div key={a.id}>{node}{selected&&canResize&&<button className="resize-handle" title="Redimensionar" style={{left:(a.x+a.width)*viewportSize.width-7,top:(a.y+a.height)*viewportSize.height-7}} onPointerDown={e=>startObjectDrag(e,a.id,'resize')}/>}</div>
   })},[currentPage,viewportSize,zoom,selectedId,tool])
 
+  const smartOverlay=smartMode?<div className="smart-overlay">{smartBlocks.map(block=><button key={block.id} className={`smart-block smart-${block.kind} ${smartSelectedId===block.id?'selected':''}`} style={{left:block.rect.x*viewportSize.width,top:block.rect.y*viewportSize.height,width:block.rect.width*viewportSize.width,height:block.rect.height*viewportSize.height}} title={`${block.label}${block.text?`: ${block.text.slice(0,120)}`:''}`} onPointerDown={e=>{e.stopPropagation();setSmartSelectedId(block.id)}}><span>{block.label}</span></button>)}</div>:null
+
   const currentDragElement=dragRect&&(tool==='highlight'||tool==='redact')?<div className={`rect-annotation ${tool} preview`} style={{left:dragRect.x*viewportSize.width,top:dragRect.y*viewportSize.height,width:dragRect.width*viewportSize.width,height:dragRect.height*viewportSize.height}}/>:null
   const hiddenSourceKeys=useMemo(()=>new Set(currentPage?.annotations.filter(a=>a.kind==='replaceText').map(a=>a.kind==='replaceText'?a.sourceKey:'')??[]),[currentPage])
 
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><span className="brand-mark">P</span><span>OpenPDF</span><span className="version">v0.4</span></div><div className="file-title">{fileName||'Editor PDF gratuito y local'}</div><div className="top-actions">
+    <header className="topbar"><div className="brand"><span className="brand-mark">P</span><span>OpenPDF</span><span className="version">v0.5</span></div><div className="file-title">{fileName||'Editor PDF gratuito y local'}</div><div className="top-actions">
       <button className="button secondary" onClick={()=>setShowInfo(true)}>?</button><button className="button secondary" onClick={()=>combineInputRef.current?.click()}>Combinar</button><button className="button secondary" onClick={()=>setShowSplit(true)} disabled={!pdf}>Dividir</button><button className="button secondary" onClick={()=>setShowForms(true)} disabled={!formFields.length}>Formularios{formFields.length?` (${formFields.length})`:''}</button><button className="button secondary" onClick={()=>fileInputRef.current?.click()}>Abrir</button><button className="button primary" onClick={save} disabled={!pdf}>Guardar PDF</button>
     </div><input ref={fileInputRef} type="file" accept="application/pdf,.pdf" hidden onChange={e=>e.target.files?.[0]&&openFile(e.target.files[0])}/><input ref={combineInputRef} type="file" accept="application/pdf,.pdf" multiple hidden onChange={e=>combineFiles(e.target.files)}/><input ref={imageInputRef} type="file" accept="image/png,image/jpeg" hidden onChange={e=>loadPendingImage(e.target.files?.[0])}/></header>
 
-    <div className="workspace"><aside className="sidebar"><div className="sidebar-title">Páginas</div><div className="page-list">{pages.map((p,i)=><button key={p.id} className={`page-item ${i===pageIndex?'active':''}`} onClick={()=>setPageIndex(i)}><span className="page-icon">▤</span><span>Página {i+1}</span>{Boolean(p.ocrWords?.length)&&<span className="ocr-dot" title={`${p.ocrWords?.length} palabras OCR`}>OCR</span>}{p.annotations.some(a=>a.kind==='redact')&&<span className="secure-dot" title="Contiene redacción segura">●</span>}</button>)}</div>{pdf&&<div className="page-actions page-actions-6"><button title="Subir página" onClick={()=>movePage(-1)}>↑</button><button title="Bajar página" onClick={()=>movePage(1)}>↓</button><button title="Duplicar página" onClick={duplicateCurrent}>⧉</button><button title="Extraer página" onClick={extractCurrent}>⇩</button><button title="Rotar" onClick={rotate}>↻</button><button title="Eliminar" onClick={removeCurrent}>⌫</button></div>}</aside>
-      <main className="main-area"><div className="toolbar"><button className={tool==='select'?'active':''} onClick={()=>setToolAndStatus('select')}>Cursor</button><button className={tool==='editText'?'active':''} onClick={()=>setToolAndStatus('editText')} disabled={!pdf}>Editar texto</button><button className={tool==='text'?'active':''} onClick={()=>setToolAndStatus('text')} disabled={!pdf}>Añadir texto</button><button className={tool==='highlight'?'active':''} onClick={()=>setToolAndStatus('highlight')} disabled={!pdf}>Resaltar</button><button className={tool==='draw'?'active':''} onClick={()=>setToolAndStatus('draw')} disabled={!pdf}>Dibujar / Firma</button><button className={tool==='image'?'active':''} onClick={()=>setToolAndStatus('image')} disabled={!pdf}>Imagen</button><button onClick={()=>setShowChart(true)} disabled={!pdf}>Tabla / Gráfico</button><button className={currentPage?.ocrWords?.length?'ocr-ready':''} onClick={()=>setShowOcr(true)} disabled={!pdf}>OCR{currentPage?.ocrWords?.length?' ✓':''}</button><button className={tool==='redact'?'active danger-tool':'danger-tool'} onClick={()=>setToolAndStatus('redact')} disabled={!pdf}>Redactar</button><span className="divider"/><button onClick={undo} disabled={!past.length}>↶</button><button onClick={redo} disabled={!future.length}>↷</button><span className="divider"/><button onClick={()=>setZoom(z=>Math.max(.5,+(z-.15).toFixed(2)))}>-</button><span className="zoom-label">{Math.round(zoom*100)}%</span><button onClick={()=>setZoom(z=>Math.min(2.5,+(z+.15).toFixed(2)))}>+</button></div>
-        <div className="document-stage">{!pdf?<button className="drop-card" onClick={()=>fileInputRef.current?.click()}><span className="drop-icon">PDF</span><strong>Abre un documento PDF</strong><span>Todo el documento se procesa localmente en tu equipo.</span></button>:<div ref={pageHostRef} className={`page-host tool-${tool}`} style={{width:viewportSize.width,height:viewportSize.height}} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={finishPointerAction} onPointerCancel={finishPointerAction}><canvas ref={canvasRef}/>
-          {showOcrBoxes&&Boolean(currentPage?.ocrWords?.length)&&<div className="ocr-overlay">{ocrDisplayItems.map(item=><span key={item.key} className={`ocr-box ${item.confidence!==undefined&&item.confidence<55?'low':''}`} title={`${item.text} · ${Math.round(item.confidence??0)}%`} style={{left:item.x,top:item.y,width:item.width,height:item.height}}/>)}</div>}
+    <div className="workspace"><aside className="sidebar"><div className="sidebar-title">Páginas</div><div className="page-list">{pages.map((p,i)=><button key={p.id} className={`page-item ${i===pageIndex?'active':''}`} onClick={()=>navigatePage(i,'top')}><span className="page-icon">▤</span><span>Página {i+1}</span>{Boolean(p.ocrWords?.length)&&<span className="ocr-dot" title={`${p.ocrWords?.length} palabras OCR`}>OCR</span>}{p.annotations.some(a=>a.kind==='redact')&&<span className="secure-dot" title="Contiene redacción segura">●</span>}</button>)}</div>{pdf&&<div className="page-actions page-actions-6"><button title="Subir página" onClick={()=>movePage(-1)}>↑</button><button title="Bajar página" onClick={()=>movePage(1)}>↓</button><button title="Duplicar página" onClick={duplicateCurrent}>⧉</button><button title="Extraer página" onClick={extractCurrent}>⇩</button><button title="Rotar" onClick={rotate}>↻</button><button title="Eliminar" onClick={removeCurrent}>⌫</button></div>}</aside>
+      <main className="main-area"><div className="toolbar"><button className={tool==='select'?'active':''} onClick={()=>setToolAndStatus('select')}>Cursor</button><button className={tool==='editText'?'active':''} onClick={()=>setToolAndStatus('editText')} disabled={!pdf}>Editar texto</button><button className={tool==='text'?'active':''} onClick={()=>setToolAndStatus('text')} disabled={!pdf}>Añadir texto</button><button className={tool==='highlight'?'active':''} onClick={()=>setToolAndStatus('highlight')} disabled={!pdf}>Resaltar</button><button className={tool==='draw'?'active':''} onClick={()=>setToolAndStatus('draw')} disabled={!pdf}>Dibujar / Firma</button><button className={tool==='image'?'active':''} onClick={()=>setToolAndStatus('image')} disabled={!pdf}>Imagen</button><button onClick={()=>setShowChart(true)} disabled={!pdf}>Tabla / Gráfico</button><button className={smartMode?'active':''} onClick={()=>smartMode?closeSmart():runSmartAnalysis()} disabled={!pdf||smartBusy}>{smartBusy?'Analizando…':'Analizar'}</button><button className={currentPage?.ocrWords?.length?'ocr-ready':''} onClick={()=>setShowOcr(true)} disabled={!pdf}>OCR{currentPage?.ocrWords?.length?' ✓':''}</button><button className={tool==='redact'?'active danger-tool':'danger-tool'} onClick={()=>setToolAndStatus('redact')} disabled={!pdf}>Redactar</button><span className="divider"/><button onClick={undo} disabled={!past.length}>↶</button><button onClick={redo} disabled={!future.length}>↷</button><span className="divider"/><button title="Página anterior (Page Up)" onClick={()=>navigatePage(pageIndex-1,'bottom')} disabled={!pdf||pageIndex===0}>‹</button><div className="page-jump"><input aria-label="Ir a página" type="number" min={1} max={Math.max(1,pages.length)} value={pdf?pageIndex+1:''} onChange={e=>{const n=Number(e.target.value);if(Number.isFinite(n)&&n>=1&&n<=pages.length)navigatePage(n-1,'top')}}/><span>/ {pages.length||0}</span></div><button title="Página siguiente (Page Down)" onClick={()=>navigatePage(pageIndex+1,'top')} disabled={!pdf||pageIndex>=pages.length-1}>›</button><span className="divider"/><button onClick={()=>setZoom(z=>Math.max(.5,+(z-.15).toFixed(2)))}>-</button><span className="zoom-label">{Math.round(zoom*100)}%</span><button onClick={()=>setZoom(z=>Math.min(2.5,+(z+.15).toFixed(2)))}>+</button><button title="Ajustar al ancho" onClick={fitWidth} disabled={!pdf}>↔</button><button className={wheelPageTurn?'scroll-toggle active':'scroll-toggle'} title="Al llegar al borde, la rueda cambia de página" onClick={()=>setWheelPageTurn(v=>!v)}>Scroll⇵</button></div>
+        <div ref={documentStageRef} className="document-stage" onWheel={onStageWheel}>{!pdf?<button className="drop-card" onClick={()=>fileInputRef.current?.click()}><span className="drop-icon">PDF</span><strong>Abre un documento PDF</strong><span>Todo el documento se procesa localmente en tu equipo.</span></button>:<div ref={pageHostRef} className={`page-host tool-${tool}`} style={{width:viewportSize.width,height:viewportSize.height}} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={finishPointerAction} onPointerCancel={finishPointerAction}><canvas ref={canvasRef}/>
+          {smartOverlay}{showOcrBoxes&&Boolean(currentPage?.ocrWords?.length)&&<div className="ocr-overlay">{ocrDisplayItems.map(item=><span key={item.key} className={`ocr-box ${item.confidence!==undefined&&item.confidence<55?'low':''}`} title={`${item.text} · ${Math.round(item.confidence??0)}%`} style={{left:item.x,top:item.y,width:item.width,height:item.height}}/>)}</div>}
           {tool==='editText'&&<div className="existing-text-layer">{editableTextItems.map(item=>!hiddenSourceKeys.has(item.key)&&<button key={item.key} className={`existing-text-hitbox ${item.source==='ocr'?'ocr-hitbox':''}`} title={`${item.text}${item.confidence!==undefined?` · OCR ${Math.round(item.confidence)}%`:''}`} style={{left:item.x,top:item.y,width:Math.max(4,item.width),height:Math.max(8,item.height)}} onPointerDown={e=>{e.stopPropagation();editExistingText(item)}}/>)}</div>}
           <svg className={`annotation-layer ${tool==='select'?'interactive':''}`} width={viewportSize.width} height={viewportSize.height}>{strokeElements}</svg><div className={`object-layer ${tool==='select'?'interactive':''}`}>{annotationElements}{currentDragElement}</div>{selectedId&&tool==='select'&&<div className="selection-toolbar"><span>Objeto seleccionado</span><button onClick={deleteSelected}>Eliminar</button></div>}
+          {smartMode&&smartSelected&&<div className="smart-card" onPointerDown={e=>e.stopPropagation()}><div className="smart-card-head"><strong>{smartSelected.label}</strong><button onClick={closeSmart}>×</button></div>{smartSelected.text&&<p>{smartSelected.text.slice(0,220)}{smartSelected.text.length>220?'…':''}</p>}<div className="smart-card-actions"><button onClick={smartAction}>{smartSelected.kind==='table'?'Editar datos':smartSelected.annotationId?'Seleccionar objeto':smartSelected.kind==='image'?'Eliminar de forma segura':'Editar texto'}</button>{smartSelected.kind==='table'&&<button onClick={copyDetectedTable}>Copiar a Excel</button>}</div></div>}
           {currentPage?.ocrWords?.length?<button className="ocr-overlay-toggle" onClick={e=>{e.stopPropagation();setShowOcrBoxes(v=>!v)}}>{showOcrBoxes?'Ocultar OCR':'Ver OCR'}</button>:null}
         </div>}</div>
       </main></div>
-    <footer className="statusbar"><span>{status}</span><span>{pdf?`Página ${pageIndex+1} de ${pages.length}${currentPage?.ocrWords?.length?` · OCR ${currentPage.ocrWords.length} palabras`:''}`:'Local · sin subir archivos'}</span></footer>
+    <footer className="statusbar"><span>{status}</span><span>{pdf?`Página ${pageIndex+1} de ${pages.length}${currentPage?.ocrWords?.length?` · OCR ${currentPage.ocrWords.length} palabras`:''} · rueda ${wheelPageTurn?'cambia página':'solo desplaza'}`:'Local · sin subir archivos'}</span></footer>
 
     {showChart&&<div className="modal-backdrop" onMouseDown={()=>setShowChart(false)}><section className="modal chart-modal table-modal" onMouseDown={e=>e.stopPropagation()}><div className="modal-header"><div><strong>Tabla y gráfico</strong><span>Reconstruye columnas, corrige celdas y genera un gráfico.</span></div><button onClick={()=>setShowChart(false)}>×</button></div><div className="chart-editor"><div className="table-detect-actions"><button className="button secondary" onClick={()=>detectTable('auto')}>Detectar automáticamente</button><button className="button secondary" onClick={()=>detectTable('pdf')} disabled={!textItems.length}>Desde texto PDF</button><button className="button secondary" onClick={()=>detectTable('ocr')} disabled={!ocrDisplayItems.length}>Desde OCR</button></div><div className="table-message">{tableMessage}</div>
       <div className="sheet-wrap"><table className="sheet"><tbody>{tableGrid.map((row,ri)=><tr key={ri}><th>{ri+1}</th>{row.map((cell,ci)=><td key={ci}><input aria-label={`Fila ${ri+1}, columna ${ci+1}`} value={cell} onChange={e=>updateGridCell(ri,ci,e.target.value)}/></td>)}<td className="row-tools"><button title="Eliminar fila" onClick={()=>removeGridRow(ri)} disabled={tableGrid.length<=2}>×</button></td></tr>)}</tbody></table></div><div className="sheet-actions"><button onClick={addGridRow}>+ Fila</button><button onClick={addGridColumn}>+ Columna</button>{tableGrid[0]?.map((_,ci)=><button key={ci} className="remove-col" onClick={()=>removeGridColumn(ci)} disabled={(tableGrid[0]?.length||0)<=2}>− C{ci+1}</button>)}</div>
@@ -488,6 +707,6 @@ export default function App() {
 
     {showForms&&<div className="modal-backdrop" onMouseDown={()=>setShowForms(false)}><section className="modal" onMouseDown={e=>e.stopPropagation()}><div className="modal-header"><div><strong>Formularios</strong><span>Edita campos AcroForm detectados en el PDF.</span></div><button onClick={()=>setShowForms(false)}>×</button></div><div className="form-list">{formFields.map(field=><label className="form-row" key={field.name}><span>{field.name}</span>{field.type==='checkbox'?<input type="checkbox" checked={Boolean(formEdits[field.name])} onChange={e=>setFormEdits(v=>({...v,[field.name]:e.target.checked}))}/>:field.options?.length?<select value={String(formEdits[field.name]??'')} onChange={e=>setFormEdits(v=>({...v,[field.name]:e.target.value}))}><option value="">—</option>{field.options.map(o=><option value={o} key={o}>{o}</option>)}</select>:<input type="text" value={String(formEdits[field.name]??'')} disabled={field.type==='unknown'} onChange={e=>setFormEdits(v=>({...v,[field.name]:e.target.value}))}/>}</label>)}</div><div className="modal-footer"><button className="button primary" onClick={()=>setShowForms(false)}>Aplicar</button></div></section></div>}
 
-    {showInfo&&<div className="modal-backdrop" onMouseDown={()=>setShowInfo(false)}><section className="modal info-modal" onMouseDown={e=>e.stopPropagation()}><div className="modal-header"><div><strong>OpenPDF v0.4</strong><span>Edición PDF local con OCR y reconstrucción de tablas.</span></div><button onClick={()=>setShowInfo(false)}>×</button></div><div className="info-content"><p><b>OCR:</b> reconoce páginas escaneadas con Tesseract.js. La capa reconocida se guarda como texto prácticamente invisible en el PDF para hacerlo buscable/seleccionable. Puedes mostrar sus cajas y corregir palabras con “Editar texto”.</p><p><b>Tablas:</b> la detección ahora agrupa líneas, busca posiciones X que se repiten entre filas, reconstruye columnas y calcula una confianza aproximada. El resultado aparece en una mini hoja de cálculo editable antes de generar el gráfico.</p><p><b>Gráficos:</b> barras, líneas o pastel desde datos detectados, OCR, Excel o CSV.</p><p><b>Objetos:</b> Cursor permite seleccionar, mover, redimensionar y eliminar objetos. Ctrl+Z/Ctrl+Y deshace/rehace.</p><p className="safe"><b>Redacción segura:</b> las páginas con redacciones se rasterizan al exportar para eliminar el contenido subyacente. Esa rasterización elimina también la capa OCR de dichas páginas, evitando que el texto redactado reaparezca en búsquedas.</p><p><b>Privacidad OCR:</b> el reconocimiento ocurre localmente. El primer uso puede requerir descargar los modelos de idioma de Tesseract.js; después el navegador puede reutilizar su caché.</p><p><b>Edición profunda:</b> texto vectorial existente aún usa reemplazo visual. La reconstrucción de content streams, fuentes y reflow de párrafos sigue siendo el siguiente gran frente.</p></div><div className="modal-footer"><button className="button primary" onClick={()=>setShowInfo(false)}>Entendido</button></div></section></div>}
+    {showInfo&&<div className="modal-backdrop" onMouseDown={()=>setShowInfo(false)}><section className="modal info-modal" onMouseDown={e=>e.stopPropagation()}><div className="modal-header"><div><strong>OpenPDF v0.5</strong><span>Análisis semántico, navegación cómoda, OCR y edición PDF local.</span></div><button onClick={()=>setShowInfo(false)}>×</button></div><div className="info-content"><p><b>Navegación:</b> usa la rueda para desplazarte dentro de una página; al llegar al borde, continúa con la página anterior/siguiente. Page Up/Page Down también cambian de página, y ↔ ajusta el documento al ancho.</p><p><b>Análisis inteligente:</b> “Analizar” detecta títulos, párrafos, listas, tablas, encabezados, pies, imágenes y objetos insertados. Al seleccionar un bloque aparecen acciones contextuales para editarlo, convertir una tabla o seleccionar el objeto.</p><p><b>OCR:</b> reconoce páginas escaneadas con Tesseract.js. La capa reconocida se guarda como texto prácticamente invisible en el PDF para hacerlo buscable/seleccionable. Puedes mostrar sus cajas y corregir palabras con “Editar texto”.</p><p><b>Tablas:</b> la detección ahora agrupa líneas, busca posiciones X que se repiten entre filas, reconstruye columnas y calcula una confianza aproximada. El resultado aparece en una mini hoja de cálculo editable antes de generar el gráfico.</p><p><b>Gráficos:</b> barras, líneas o pastel desde datos detectados, OCR, Excel o CSV.</p><p><b>Objetos:</b> Cursor permite seleccionar, mover, redimensionar y eliminar objetos. Ctrl+Z/Ctrl+Y deshace/rehace.</p><p className="safe"><b>Redacción segura:</b> las páginas con redacciones se rasterizan al exportar para eliminar el contenido subyacente. Esa rasterización elimina también la capa OCR de dichas páginas, evitando que el texto redactado reaparezca en búsquedas.</p><p><b>Privacidad OCR:</b> el reconocimiento ocurre localmente. El primer uso puede requerir descargar los modelos de idioma de Tesseract.js; después el navegador puede reutilizar su caché.</p><p><b>Edición profunda:</b> texto vectorial existente aún usa reemplazo visual. La reconstrucción de content streams, fuentes y reflow de párrafos sigue siendo el siguiente gran frente.</p></div><div className="modal-footer"><button className="button primary" onClick={()=>setShowInfo(false)}>Entendido</button></div></section></div>}
   </div>
 }
