@@ -190,3 +190,11 @@ button, input, select { font: inherit; }
   .page-jump span { display:none; }
   .scroll-toggle { display:none; }
 }
+
+/* v0.6 structural selection + original-content editing */
+.smart-subtitle { border-color:rgba(55,139,190,.95); background:rgba(55,139,190,.065); }
+.smart-subtitle > span { background:#287aa7; }
+.smart-title { border-width:2px; }
+.replacement-source-mask { position:absolute; background:#fff; pointer-events:none; z-index:1; }
+.replacement-annotation { z-index:2; white-space:pre-wrap; overflow:hidden; line-height:1.18; }
+.rect-annotation.redact.white-redact { background:#fff; }

@@ -22,6 +22,7 @@ export type StrokeAnnotation = {
 export type RectangleAnnotation = {
   id: string
   kind: 'highlight' | 'redact'
+  appearance?: 'black' | 'white'
   x: number
   y: number
   width: number
@@ -60,6 +61,11 @@ export type ReplaceTextAnnotation = {
   id: string
   kind: 'replaceText'
   sourceKey: string
+  // Original rectangle stays fixed so moving/resizing edited text does not reveal the source.
+  sourceX?: number
+  sourceY?: number
+  sourceWidth?: number
+  sourceHeight?: number
   x: number
   y: number
   width: number

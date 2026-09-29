@@ -10,6 +10,24 @@ import {
 } from 'pdf-lib'
 import type { FormEditValue, FormFieldInfo, PageState } from './types'
 
+
+function wrapText(text: string, font: any, size: number, maxWidth: number) {
+  const paragraphs = text.split(/\n/)
+  const lines: string[] = []
+  for (const paragraph of paragraphs) {
+    const words = paragraph.split(/\s+/).filter(Boolean)
+    if (!words.length) { lines.push(''); continue }
+    let line = words[0]
+    for (const word of words.slice(1)) {
+      const candidate = `${line} ${word}`
+      if (font.widthOfTextAtSize(candidate, size) <= maxWidth || !line) line = candidate
+      else { lines.push(line); line = word }
+    }
+    lines.push(line)
+  }
+  return lines
+}
+
 function dataUrlToBytes(dataUrl: string) {
   const [, base64] = dataUrl.split(',')
   const binary = atob(base64)
@@ -68,10 +86,31 @@ export async function exportEditedPdf(source: Uint8Array, pages: PageState[], fo
       if (annotation.kind === 'text') {
         page.drawText(annotation.text, { x: annotation.x * width, y: height - annotation.y * height - annotation.size, size: annotation.size, font, color: rgb(.06,.07,.09) })
       } else if (annotation.kind === 'replaceText') {
-        const x = annotation.x * width, y = height - (annotation.y + annotation.height) * height
-        const w = annotation.width * width, h = annotation.height * height
-        page.drawRectangle({ x: x - 1, y: y - 1, width: w + 2, height: h + 2, color: rgb(1,1,1) })
-        if (annotation.text) page.drawText(annotation.text, { x, y: y + Math.max(0,(h-annotation.size)/2), size: annotation.size, font, color: rgb(.06,.07,.09), maxWidth: Math.max(w*1.8,w+20) })
+        const sx = (annotation.sourceX ?? annotation.x) * width
+        const syNorm = annotation.sourceY ?? annotation.y
+        const sw = (annotation.sourceWidth ?? annotation.width) * width
+        const shNorm = annotation.sourceHeight ?? annotation.height
+        const sh = shNorm * height
+        const sy = height - (syNorm + shNorm) * height
+        // Always cover the original source rectangle. This lets a converted PDF text block
+        // move elsewhere without the old text reappearing underneath.
+        page.drawRectangle({ x: sx - 1.5, y: sy - 1.5, width: sw + 3, height: sh + 3, color: rgb(1,1,1) })
+
+        const x = annotation.x * width
+        const h = annotation.height * height
+        const w = annotation.width * width
+        const topY = height - annotation.y * height
+        if (annotation.text) {
+          const size = Math.max(4, annotation.size)
+          const lineHeight = size * 1.18
+          const lines = wrapText(annotation.text, font, size, Math.max(8, w - 2))
+          let baseline = topY - size
+          for (const line of lines) {
+            if (baseline < topY - h) break
+            if (line) page.drawText(line, { x, y: baseline, size, font, color: rgb(.06,.07,.09), maxWidth: Math.max(8,w) })
+            baseline -= lineHeight
+          }
+        }
       } else if (annotation.kind === 'stroke') {
         for (let i=1;i<annotation.points.length;i++) {
           const a=annotation.points[i-1], b=annotation.points[i]
@@ -80,7 +119,7 @@ export async function exportEditedPdf(source: Uint8Array, pages: PageState[], fo
       } else if (annotation.kind === 'highlight') {
         page.drawRectangle({ x:annotation.x*width, y:height-(annotation.y+annotation.height)*height, width:annotation.width*width, height:annotation.height*height, color:rgb(1,.9,.18), opacity:.34 })
       } else if (annotation.kind === 'redact') {
-        page.drawRectangle({ x:annotation.x*width, y:height-(annotation.y+annotation.height)*height, width:annotation.width*width, height:annotation.height*height, color:rgb(0,0,0) })
+        page.drawRectangle({ x:annotation.x*width, y:height-(annotation.y+annotation.height)*height, width:annotation.width*width, height:annotation.height*height, color:annotation.appearance==='white'?rgb(1,1,1):rgb(0,0,0) })
       } else if (annotation.kind === 'image' || annotation.kind === 'chart') {
         const bytes = dataUrlToBytes(annotation.dataUrl)
         const image = annotation.kind === 'image' && annotation.mime === 'image/jpeg' ? await outputDoc.embedJpg(bytes) : await outputDoc.embedPng(bytes)

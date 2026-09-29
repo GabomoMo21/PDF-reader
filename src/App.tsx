@@ -27,7 +27,7 @@ type TableDetection = {
   message: string
 }
 
-type SmartKind = 'title' | 'paragraph' | 'table' | 'list' | 'header' | 'footer' | 'image' | 'chart' | 'signature'
+type SmartKind = 'title' | 'subtitle' | 'paragraph' | 'table' | 'list' | 'header' | 'footer' | 'image' | 'chart' | 'signature'
 type SmartBlock = {
   id: string
   kind: SmartKind
@@ -39,7 +39,7 @@ type SmartBlock = {
 }
 
 const smartKindLabel: Record<SmartKind,string> = {
-  title:'Título', paragraph:'Párrafo', table:'Tabla', list:'Lista', header:'Encabezado', footer:'Pie de página', image:'Imagen', chart:'Gráfico', signature:'Firma / dibujo'
+  title:'Título', subtitle:'Subtítulo', paragraph:'Párrafo', table:'Tabla', list:'Lista', header:'Encabezado', footer:'Pie de página', image:'Imagen', chart:'Gráfico', signature:'Firma / dibujo'
 }
 
 function downloadBytes(bytes: Uint8Array, fileName: string) {
@@ -284,27 +284,50 @@ function detectSmartTextBlocks(items: ExistingTextItem[], pageWidth:number, page
   const medFont=Math.max(7,median(items.map(i=>i.fontSize)))
   const blocks:SmartBlock[]=[]
   const consumed=new Set<number>()
+  const source:SmartBlock['source']=items[0]?.source==='ocr'?'ocr':'pdf'
+  const lineGap=(a:number,b:number)=>lines[b].rect.y-(lines[a].rect.y+lines[a].rect.height)
+  const words=(t:string)=>t.trim().split(/\s+/).filter(Boolean).length
+  const endsSentence=(t:string)=>/[.!?;,:]$/.test(t.trim())
+  const sectionPrefix=(t:string)=>/^\s*(?:(?:\d+(?:\.\d+)*)[.)]?|[IVXLCDM]+[.)]|[A-Z][.)])\s+\S/i.test(t)
 
-  // Header/footer are useful because users often want to edit or remove them as a unit.
+  // Headers/footers: keep the zones narrower so the first body line is not mistaken for chrome.
   lines.forEach((line,i)=>{
     const top=line.rect.y/pageHeight, bottom=(line.rect.y+line.rect.height)/pageHeight
-    if(top<.075 && line.text.length>1){blocks.push({id:`smart-header-${i}`,kind:'header',label:'Encabezado',rect:smartRectFromItems(line.items,pageWidth,pageHeight),text:line.text,source:items[0]?.source==='ocr'?'ocr':'pdf'});consumed.add(i)}
-    else if(bottom>.925 && line.text.length>1){blocks.push({id:`smart-footer-${i}`,kind:'footer',label:'Pie de página',rect:smartRectFromItems(line.items,pageWidth,pageHeight),text:line.text,source:items[0]?.source==='ocr'?'ocr':'pdf'});consumed.add(i)}
+    const shortish=line.text.length<=115
+    if(top<.045&&shortish){blocks.push({id:`smart-header-${i}`,kind:'header',label:'Encabezado',rect:smartRectFromItems(line.items,pageWidth,pageHeight),text:line.text,source});consumed.add(i)}
+    else if(bottom>.955&&shortish){blocks.push({id:`smart-footer-${i}`,kind:'footer',label:'Pie de página',rect:smartRectFromItems(line.items,pageWidth,pageHeight),text:line.text,source});consumed.add(i)}
   })
 
-  // Titles: substantially larger than the median body text, reasonably short, and not in footer/header.
+  // Section headings/subtitles. Numbered headings are strong evidence even when font size equals body text.
   lines.forEach((line,i)=>{
     if(consumed.has(i))return
-    if(line.font>=medFont*1.28 && line.text.length<=150){blocks.push({id:`smart-title-${i}`,kind:'title',label:'Título',rect:smartRectFromItems(line.items,pageWidth,pageHeight),text:line.text,source:items[0]?.source==='ocr'?'ocr':'pdf'});consumed.add(i)}
+    const wc=words(line.text), before=i>0?lineGap(i-1,i):medFont*2, after=i<lines.length-1?lineGap(i,i+1):medFont*2
+    const numbered=sectionPrefix(line.text)
+    const compact=line.text.length<=120&&wc<=16
+    const separated=before>medFont*.45||after>medFont*.25
+    const modestEmphasis=line.font>=medFont*1.03
+    if(compact && (numbered || (modestEmphasis&&separated&&!endsSentence(line.text)&&wc<=10))){
+      blocks.push({id:`smart-subtitle-${i}`,kind:'subtitle',label:'Subtítulo',rect:smartRectFromItems(line.items,pageWidth,pageHeight),text:line.text,source});consumed.add(i)
+    }
   })
 
-  // Lists: consecutive lines sharing bullet/number prefixes or strongly aligned indents.
+  // Main title: require a much stronger font-size signal and title-like shape. This avoids classifying
+  // ordinary first lines as titles when PDF font metrics are a little noisy.
+  const titleCandidates=lines.map((line,i)=>({line,i,ratio:line.font/medFont,top:line.rect.y/pageHeight,wc:words(line.text)}))
+    .filter(x=>!consumed.has(x.i)&&x.ratio>=1.48&&x.line.text.length<=125&&x.wc<=15&&!endsSentence(x.line.text)&&x.top<.45)
+    .sort((a,b)=>b.ratio-a.ratio||a.top-b.top)
+  if(titleCandidates.length){
+    const x=titleCandidates[0]
+    blocks.push({id:`smart-title-${x.i}`,kind:'title',label:'Título',rect:smartRectFromItems(x.line.items,pageWidth,pageHeight),text:x.line.text,source});consumed.add(x.i)
+  }
+
+  // Lists: consecutive lines sharing bullet/number prefixes, but exclude section numbering already consumed.
   const isList=(t:string)=>/^\s*(?:[•▪◦·\-*–—]|\(?\d+[.)]|[A-Za-z][.)])\s+/.test(t)
   for(let i=0;i<lines.length;){
     if(consumed.has(i)||!isList(lines[i].text)){i++;continue}
     const group=[i];let j=i+1
     while(j<lines.length&&!consumed.has(j)&&isList(lines[j].text)&&Math.abs(lines[j].rect.x-lines[i].rect.x)<medFont*2.2){group.push(j);j++}
-    if(group.length>=2){const groupItems=group.flatMap(k=>lines[k].items);blocks.push({id:`smart-list-${i}`,kind:'list',label:'Lista',rect:smartRectFromItems(groupItems,pageWidth,pageHeight),text:group.map(k=>lines[k].text).join('\n'),source:items[0]?.source==='ocr'?'ocr':'pdf'});group.forEach(k=>consumed.add(k))}
+    if(group.length>=2){const groupItems=group.flatMap(k=>lines[k].items);blocks.push({id:`smart-list-${i}`,kind:'list',label:'Lista',rect:smartRectFromItems(groupItems,pageWidth,pageHeight),text:group.map(k=>lines[k].text).join('\n'),source});group.forEach(k=>consumed.add(k))}
     i=Math.max(i+1,j)
   }
 
@@ -322,24 +345,25 @@ function detectSmartTextBlocks(items: ExistingTextItem[], pageWidth:number, page
     if(best.length>=2){
       const tableItems=best.flatMap(k=>lines[k].items)
       const detected=detectTableGrid(tableItems)
-      if(detected&&detected.grid.length>=2){blocks.push({id:'smart-table-main',kind:'table',label:`Tabla · ${detected.grid.length}×${detected.grid[0]?.length||0}`,rect:smartRectFromItems(tableItems,pageWidth,pageHeight),text:detected.message,source:items[0]?.source==='ocr'?'ocr':'pdf'});best.forEach(k=>consumed.add(k))}
+      if(detected&&detected.grid.length>=2){blocks.push({id:'smart-table-main',kind:'table',label:`Tabla · ${detected.grid.length}×${detected.grid[0]?.length||0}`,rect:smartRectFromItems(tableItems,pageWidth,pageHeight),text:detected.message,source});best.forEach(k=>consumed.add(k))}
     }
   }
 
-  // Remaining adjacent body lines become paragraphs.
+  // Remaining body lines become paragraphs. Allow normal line-spacing variation and minor indentation.
   for(let i=0;i<lines.length;){
     if(consumed.has(i)){i++;continue}
     const group=[i];let j=i+1
     while(j<lines.length&&!consumed.has(j)){
       const prev=lines[j-1], cur=lines[j]
       const gap=cur.rect.y-(prev.rect.y+prev.rect.height)
-      const aligned=Math.abs(cur.rect.x-prev.rect.x)<medFont*2.5
-      if(gap>medFont*1.65||!aligned||cur.font>medFont*1.25)break
+      const aligned=Math.abs(cur.rect.x-prev.rect.x)<Math.max(medFont*3.4,pageWidth*.035)
+      const bodySized=cur.font<medFont*1.34
+      if(gap>medFont*1.95||!aligned||!bodySized||sectionPrefix(cur.text))break
       group.push(j);j++
     }
     const groupItems=group.flatMap(k=>lines[k].items)
-    const text=group.map(k=>lines[k].text).join(' ')
-    if(text.trim().length>3)blocks.push({id:`smart-paragraph-${i}`,kind:'paragraph',label:'Párrafo',rect:smartRectFromItems(groupItems,pageWidth,pageHeight),text,source:items[0]?.source==='ocr'?'ocr':'pdf'})
+    const text=group.map(k=>k===group[0]?lines[k].text:lines[k].text).join(' ').replace(/\s+/g,' ').trim()
+    if(text.length>3)blocks.push({id:`smart-paragraph-${i}`,kind:'paragraph',label:'Párrafo',rect:smartRectFromItems(groupItems,pageWidth,pageHeight),text,source})
     i=Math.max(i+1,j)
   }
   return blocks
@@ -549,7 +573,7 @@ export default function App() {
       updateCurrentPage(pg=>({...pg,ocrWords:(pg.ocrWords??[]).map(w=>w.id===wordId?{...w,text:replacement}:w).filter(w=>w.text.length>0)}))
       return
     }
-    const existing=currentPage?.annotations.find(a=>a.kind==='replaceText'&&a.sourceKey===item.key);const original=existing?.kind==='replaceText'?existing.text:item.text;const replacement=window.prompt('Editar texto (déjalo vacío para ocultarlo):',original);if(replacement===null)return;const normalized={x:item.x/viewportSize.width,y:item.y/viewportSize.height,width:item.width/viewportSize.width,height:item.height/viewportSize.height};const pdfFontSize=Math.max(5,item.fontSize/zoom);updateCurrentPage(pg=>({...pg,annotations:[...pg.annotations.filter(a=>!(a.kind==='replaceText'&&a.sourceKey===item.key)),{id:uid(),kind:'replaceText',sourceKey:item.key,...normalized,text:replacement,size:pdfFontSize}]}))
+    const existing=currentPage?.annotations.find(a=>a.kind==='replaceText'&&a.sourceKey===item.key);const original=existing?.kind==='replaceText'?existing.text:item.text;const replacement=window.prompt('Editar texto (déjalo vacío para ocultarlo):',original);if(replacement===null)return;const normalized={x:item.x/viewportSize.width,y:item.y/viewportSize.height,width:item.width/viewportSize.width,height:item.height/viewportSize.height};const pdfFontSize=Math.max(5,item.fontSize/zoom);updateCurrentPage(pg=>({...pg,annotations:[...pg.annotations.filter(a=>!(a.kind==='replaceText'&&a.sourceKey===item.key)),{id:uid(),kind:'replaceText',sourceKey:item.key,sourceX:normalized.x,sourceY:normalized.y,sourceWidth:normalized.width,sourceHeight:normalized.height,...normalized,text:replacement,size:pdfFontSize}]}))
   }
 
   const secureRedactions=async(bytes:Uint8Array,states:PageState[])=>{
@@ -644,11 +668,51 @@ export default function App() {
   }
   const closeSmart=()=>{setSmartMode(false);setSmartSelectedId(null)}
   const smartSelected=smartBlocks.find(b=>b.id===smartSelectedId)??null
+
+  const convertSmartTextToObject=(block:SmartBlock, ask=true)=>{
+    if(!currentPage||!block.text)return
+    const initial=block.text
+    const replacement=ask?window.prompt('Edita el bloque. Después podrás moverlo y redimensionarlo:',initial):initial
+    if(replacement===null)return
+    const lineCount=Math.max(1,initial.split(/\n/).length,Math.round((block.rect.height*viewportSize.height)/Math.max(10,median(textItems.map(i=>i.height)||[12]))))
+    const estimatedPx=Math.max(8,Math.min(28,(block.rect.height*viewportSize.height/lineCount)*.82))
+    const ann:Annotation={id:uid(),kind:'replaceText',sourceKey:`smart:${currentPage.sourceIndex}:${block.id}`,sourceX:block.rect.x,sourceY:block.rect.y,sourceWidth:block.rect.width,sourceHeight:block.rect.height,x:block.rect.x,y:block.rect.y,width:block.rect.width,height:block.rect.height,text:replacement,size:Math.max(5,estimatedPx/zoom)}
+    updateCurrentPage(pg=>({...pg,annotations:[...pg.annotations.filter(a=>!(a.kind==='replaceText'&&a.sourceKey===ann.sourceKey)),ann]}))
+    setTool('select');setSelectedId(ann.id);closeSmart();setStatus(`${block.label} convertido en objeto editable. Ahora puedes moverlo, redimensionarlo o eliminar la edición.`)
+  }
+
+  const deleteSmartOriginal=(block:SmartBlock)=>{
+    if(!currentPage)return
+    if(['title','subtitle','paragraph','list','header','footer'].includes(block.kind)){
+      const ann:Annotation={id:uid(),kind:'replaceText',sourceKey:`smart-delete:${currentPage.sourceIndex}:${block.id}`,sourceX:block.rect.x,sourceY:block.rect.y,sourceWidth:block.rect.width,sourceHeight:block.rect.height,x:block.rect.x,y:block.rect.y,width:block.rect.width,height:block.rect.height,text:'',size:10}
+      updateCurrentPage(pg=>({...pg,annotations:[...pg.annotations,ann]}));closeSmart();setStatus(`${block.label} ocultado en el PDF exportado.`);return
+    }
+    if(block.kind==='image'){
+      updateCurrentPage(pg=>({...pg,annotations:[...pg.annotations,{id:uid(),kind:'redact',appearance:'white',...block.rect}]}));closeSmart();setStatus('Imagen original marcada para eliminación segura al guardar.');return
+    }
+  }
+
+  const convertPdfImageToObject=(block:SmartBlock)=>{
+    const canvas=canvasRef.current
+    if(!canvas||block.source!=='image-op')return
+    const cssW=Math.max(1,viewportSize.width),cssH=Math.max(1,viewportSize.height)
+    const sx=Math.max(0,Math.floor(block.rect.x*canvas.width)),sy=Math.max(0,Math.floor(block.rect.y*canvas.height))
+    const sw=Math.max(1,Math.min(canvas.width-sx,Math.ceil(block.rect.width*canvas.width))),sh=Math.max(1,Math.min(canvas.height-sy,Math.ceil(block.rect.height*canvas.height)))
+    const crop=document.createElement('canvas');crop.width=sw;crop.height=sh
+    const ctx=crop.getContext('2d');if(!ctx)return
+    ctx.drawImage(canvas,sx,sy,sw,sh,0,0,sw,sh)
+    const dataUrl=crop.toDataURL('image/png')
+    const imageId=uid()
+    updateCurrentPage(pg=>({...pg,annotations:[...pg.annotations,{id:uid(),kind:'redact',appearance:'white',...block.rect},{id:imageId,kind:'image',...block.rect,dataUrl,mime:'image/png'}]}))
+    setTool('select');setSelectedId(imageId);closeSmart();setStatus('Imagen original convertida en objeto editable. El original se elimina de forma segura al exportar.')
+  }
+
   const smartAction=()=>{
     if(!smartSelected)return
     if(smartSelected.kind==='table'){setShowChart(true);setTimeout(()=>detectTable(smartSelected.source==='ocr'?'ocr':'auto'),0);closeSmart();return}
     if(smartSelected.annotationId){setTool('select');setSelectedId(smartSelected.annotationId);closeSmart();setStatus(`${smartSelected.label} seleccionado. Puedes moverlo, redimensionarlo o eliminarlo.`);return}
-    if(['title','paragraph','list','header','footer'].includes(smartSelected.kind)){setToolAndStatus('editText');closeSmart();return}
+    if(['title','subtitle','paragraph','list','header','footer'].includes(smartSelected.kind)){convertSmartTextToObject(smartSelected,true);return}
+    if(smartSelected.kind==='image'&&smartSelected.source==='image-op'){convertPdfImageToObject(smartSelected);return}
     if(smartSelected.kind==='image'){setToolAndStatus('redact');closeSmart();setStatus('Imagen detectada: arrastra una redacción sobre ella para eliminarla de forma segura al guardar.')}
   }
   const copyDetectedTable=async()=>{
@@ -668,8 +732,8 @@ export default function App() {
     if(a.kind==='stroke')return null
     let node:React.ReactNode=null
     if(a.kind==='text')node=<div className={`text-annotation object ${selected?'selected':''}`} style={{left:a.x*viewportSize.width,top:a.y*viewportSize.height,fontSize:a.size*zoom}} {...common}>{a.text}</div>
-    else if(a.kind==='replaceText')node=<div className={`replacement-annotation object ${selected?'selected':''}`} style={{left:a.x*viewportSize.width-1,top:a.y*viewportSize.height-1,width:a.width*viewportSize.width+2,minHeight:a.height*viewportSize.height+2,fontSize:a.size*zoom}} {...common}>{a.text}</div>
-    else if(a.kind==='highlight'||a.kind==='redact')node=<div className={`rect-annotation ${a.kind} object ${selected?'selected':''}`} style={{left:a.x*viewportSize.width,top:a.y*viewportSize.height,width:a.width*viewportSize.width,height:a.height*viewportSize.height}} {...common}/>
+    else if(a.kind==='replaceText')node=<><div className="replacement-source-mask" style={{left:(a.sourceX??a.x)*viewportSize.width-2,top:(a.sourceY??a.y)*viewportSize.height-2,width:(a.sourceWidth??a.width)*viewportSize.width+4,height:(a.sourceHeight??a.height)*viewportSize.height+4}}/><div className={`replacement-annotation object ${selected?'selected':''}`} style={{left:a.x*viewportSize.width-1,top:a.y*viewportSize.height-1,width:a.width*viewportSize.width+2,height:a.height*viewportSize.height+2,fontSize:a.size*zoom}} {...common}>{a.text}</div></>
+    else if(a.kind==='highlight'||a.kind==='redact')node=<div className={`rect-annotation ${a.kind} ${a.kind==='redact'&&a.appearance==='white'?'white-redact':''} object ${selected?'selected':''}`} style={{left:a.x*viewportSize.width,top:a.y*viewportSize.height,width:a.width*viewportSize.width,height:a.height*viewportSize.height}} {...common}/>
     else if(a.kind==='image'||a.kind==='chart')node=<img className={`image-annotation object ${a.kind==='chart'?'chart-object':''} ${selected?'selected':''}`} src={a.dataUrl} alt={a.kind==='chart'?a.title:''} style={{left:a.x*viewportSize.width,top:a.y*viewportSize.height,width:a.width*viewportSize.width,height:a.height*viewportSize.height}} {...common}/>
     const canResize='width'in a&&'height'in a
     return <div key={a.id}>{node}{selected&&canResize&&<button className="resize-handle" title="Redimensionar" style={{left:(a.x+a.width)*viewportSize.width-7,top:(a.y+a.height)*viewportSize.height-7}} onPointerDown={e=>startObjectDrag(e,a.id,'resize')}/>}</div>
@@ -681,7 +745,7 @@ export default function App() {
   const hiddenSourceKeys=useMemo(()=>new Set(currentPage?.annotations.filter(a=>a.kind==='replaceText').map(a=>a.kind==='replaceText'?a.sourceKey:'')??[]),[currentPage])
 
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><span className="brand-mark">P</span><span>OpenPDF</span><span className="version">v0.5</span></div><div className="file-title">{fileName||'Editor PDF gratuito y local'}</div><div className="top-actions">
+    <header className="topbar"><div className="brand"><span className="brand-mark">P</span><span>OpenPDF</span><span className="version">v0.6</span></div><div className="file-title">{fileName||'Editor PDF gratuito y local'}</div><div className="top-actions">
       <button className="button secondary" onClick={()=>setShowInfo(true)}>?</button><button className="button secondary" onClick={()=>combineInputRef.current?.click()}>Combinar</button><button className="button secondary" onClick={()=>setShowSplit(true)} disabled={!pdf}>Dividir</button><button className="button secondary" onClick={()=>setShowForms(true)} disabled={!formFields.length}>Formularios{formFields.length?` (${formFields.length})`:''}</button><button className="button secondary" onClick={()=>fileInputRef.current?.click()}>Abrir</button><button className="button primary" onClick={save} disabled={!pdf}>Guardar PDF</button>
     </div><input ref={fileInputRef} type="file" accept="application/pdf,.pdf" hidden onChange={e=>e.target.files?.[0]&&openFile(e.target.files[0])}/><input ref={combineInputRef} type="file" accept="application/pdf,.pdf" multiple hidden onChange={e=>combineFiles(e.target.files)}/><input ref={imageInputRef} type="file" accept="image/png,image/jpeg" hidden onChange={e=>loadPendingImage(e.target.files?.[0])}/></header>
 
@@ -691,7 +755,7 @@ export default function App() {
           {smartOverlay}{showOcrBoxes&&Boolean(currentPage?.ocrWords?.length)&&<div className="ocr-overlay">{ocrDisplayItems.map(item=><span key={item.key} className={`ocr-box ${item.confidence!==undefined&&item.confidence<55?'low':''}`} title={`${item.text} · ${Math.round(item.confidence??0)}%`} style={{left:item.x,top:item.y,width:item.width,height:item.height}}/>)}</div>}
           {tool==='editText'&&<div className="existing-text-layer">{editableTextItems.map(item=>!hiddenSourceKeys.has(item.key)&&<button key={item.key} className={`existing-text-hitbox ${item.source==='ocr'?'ocr-hitbox':''}`} title={`${item.text}${item.confidence!==undefined?` · OCR ${Math.round(item.confidence)}%`:''}`} style={{left:item.x,top:item.y,width:Math.max(4,item.width),height:Math.max(8,item.height)}} onPointerDown={e=>{e.stopPropagation();editExistingText(item)}}/>)}</div>}
           <svg className={`annotation-layer ${tool==='select'?'interactive':''}`} width={viewportSize.width} height={viewportSize.height}>{strokeElements}</svg><div className={`object-layer ${tool==='select'?'interactive':''}`}>{annotationElements}{currentDragElement}</div>{selectedId&&tool==='select'&&<div className="selection-toolbar"><span>Objeto seleccionado</span><button onClick={deleteSelected}>Eliminar</button></div>}
-          {smartMode&&smartSelected&&<div className="smart-card" onPointerDown={e=>e.stopPropagation()}><div className="smart-card-head"><strong>{smartSelected.label}</strong><button onClick={closeSmart}>×</button></div>{smartSelected.text&&<p>{smartSelected.text.slice(0,220)}{smartSelected.text.length>220?'…':''}</p>}<div className="smart-card-actions"><button onClick={smartAction}>{smartSelected.kind==='table'?'Editar datos':smartSelected.annotationId?'Seleccionar objeto':smartSelected.kind==='image'?'Eliminar de forma segura':'Editar texto'}</button>{smartSelected.kind==='table'&&<button onClick={copyDetectedTable}>Copiar a Excel</button>}</div></div>}
+          {smartMode&&smartSelected&&<div className="smart-card" onPointerDown={e=>e.stopPropagation()}><div className="smart-card-head"><strong>{smartSelected.label}</strong><button onClick={closeSmart}>×</button></div>{smartSelected.text&&<p>{smartSelected.text.slice(0,220)}{smartSelected.text.length>220?'…':''}</p>}<div className="smart-card-actions"><button onClick={smartAction}>{smartSelected.kind==='table'?'Editar datos':smartSelected.annotationId?'Seleccionar objeto':smartSelected.kind==='image'&&smartSelected.source==='image-op'?'Convertir en objeto':'Convertir en objeto editable'}</button>{smartSelected.kind==='table'&&<button onClick={copyDetectedTable}>Copiar a Excel</button>}{!smartSelected.annotationId&&['title','subtitle','paragraph','list','header','footer','image'].includes(smartSelected.kind)&&<button onClick={()=>deleteSmartOriginal(smartSelected)}>Eliminar original</button>}</div></div>}
           {currentPage?.ocrWords?.length?<button className="ocr-overlay-toggle" onClick={e=>{e.stopPropagation();setShowOcrBoxes(v=>!v)}}>{showOcrBoxes?'Ocultar OCR':'Ver OCR'}</button>:null}
         </div>}</div>
       </main></div>
@@ -707,6 +771,6 @@ export default function App() {
 
     {showForms&&<div className="modal-backdrop" onMouseDown={()=>setShowForms(false)}><section className="modal" onMouseDown={e=>e.stopPropagation()}><div className="modal-header"><div><strong>Formularios</strong><span>Edita campos AcroForm detectados en el PDF.</span></div><button onClick={()=>setShowForms(false)}>×</button></div><div className="form-list">{formFields.map(field=><label className="form-row" key={field.name}><span>{field.name}</span>{field.type==='checkbox'?<input type="checkbox" checked={Boolean(formEdits[field.name])} onChange={e=>setFormEdits(v=>({...v,[field.name]:e.target.checked}))}/>:field.options?.length?<select value={String(formEdits[field.name]??'')} onChange={e=>setFormEdits(v=>({...v,[field.name]:e.target.value}))}><option value="">—</option>{field.options.map(o=><option value={o} key={o}>{o}</option>)}</select>:<input type="text" value={String(formEdits[field.name]??'')} disabled={field.type==='unknown'} onChange={e=>setFormEdits(v=>({...v,[field.name]:e.target.value}))}/>}</label>)}</div><div className="modal-footer"><button className="button primary" onClick={()=>setShowForms(false)}>Aplicar</button></div></section></div>}
 
-    {showInfo&&<div className="modal-backdrop" onMouseDown={()=>setShowInfo(false)}><section className="modal info-modal" onMouseDown={e=>e.stopPropagation()}><div className="modal-header"><div><strong>OpenPDF v0.5</strong><span>Análisis semántico, navegación cómoda, OCR y edición PDF local.</span></div><button onClick={()=>setShowInfo(false)}>×</button></div><div className="info-content"><p><b>Navegación:</b> usa la rueda para desplazarte dentro de una página; al llegar al borde, continúa con la página anterior/siguiente. Page Up/Page Down también cambian de página, y ↔ ajusta el documento al ancho.</p><p><b>Análisis inteligente:</b> “Analizar” detecta títulos, párrafos, listas, tablas, encabezados, pies, imágenes y objetos insertados. Al seleccionar un bloque aparecen acciones contextuales para editarlo, convertir una tabla o seleccionar el objeto.</p><p><b>OCR:</b> reconoce páginas escaneadas con Tesseract.js. La capa reconocida se guarda como texto prácticamente invisible en el PDF para hacerlo buscable/seleccionable. Puedes mostrar sus cajas y corregir palabras con “Editar texto”.</p><p><b>Tablas:</b> la detección ahora agrupa líneas, busca posiciones X que se repiten entre filas, reconstruye columnas y calcula una confianza aproximada. El resultado aparece en una mini hoja de cálculo editable antes de generar el gráfico.</p><p><b>Gráficos:</b> barras, líneas o pastel desde datos detectados, OCR, Excel o CSV.</p><p><b>Objetos:</b> Cursor permite seleccionar, mover, redimensionar y eliminar objetos. Ctrl+Z/Ctrl+Y deshace/rehace.</p><p className="safe"><b>Redacción segura:</b> las páginas con redacciones se rasterizan al exportar para eliminar el contenido subyacente. Esa rasterización elimina también la capa OCR de dichas páginas, evitando que el texto redactado reaparezca en búsquedas.</p><p><b>Privacidad OCR:</b> el reconocimiento ocurre localmente. El primer uso puede requerir descargar los modelos de idioma de Tesseract.js; después el navegador puede reutilizar su caché.</p><p><b>Edición profunda:</b> texto vectorial existente aún usa reemplazo visual. La reconstrucción de content streams, fuentes y reflow de párrafos sigue siendo el siguiente gran frente.</p></div><div className="modal-footer"><button className="button primary" onClick={()=>setShowInfo(false)}>Entendido</button></div></section></div>}
+    {showInfo&&<div className="modal-backdrop" onMouseDown={()=>setShowInfo(false)}><section className="modal info-modal" onMouseDown={e=>e.stopPropagation()}><div className="modal-header"><div><strong>OpenPDF v0.6</strong><span>Selección estructural mejorada y conversión de contenido original a objetos editables.</span></div><button onClick={()=>setShowInfo(false)}>×</button></div><div className="info-content"><p><b>Navegación:</b> usa la rueda para desplazarte dentro de una página; al llegar al borde, continúa con la página anterior/siguiente. Page Up/Page Down también cambian de página, y ↔ ajusta el documento al ancho.</p><p><b>Análisis inteligente:</b> “Analizar” distingue títulos, subtítulos/secciones numeradas, párrafos, listas, tablas, encabezados, pies, imágenes y objetos insertados. Al seleccionar un bloque aparecen acciones contextuales para editarlo, convertir una tabla o seleccionar el objeto.</p><p><b>OCR:</b> reconoce páginas escaneadas con Tesseract.js. La capa reconocida se guarda como texto prácticamente invisible en el PDF para hacerlo buscable/seleccionable. Puedes mostrar sus cajas y corregir palabras con “Editar texto”.</p><p><b>Tablas:</b> la detección ahora agrupa líneas, busca posiciones X que se repiten entre filas, reconstruye columnas y calcula una confianza aproximada. El resultado aparece en una mini hoja de cálculo editable antes de generar el gráfico.</p><p><b>Gráficos:</b> barras, líneas o pastel desde datos detectados, OCR, Excel o CSV.</p><p><b>Objetos:</b> Cursor permite seleccionar, mover, redimensionar y eliminar objetos. Ctrl+Z/Ctrl+Y deshace/rehace.</p><p className="safe"><b>Redacción segura:</b> las páginas con redacciones se rasterizan al exportar para eliminar el contenido subyacente. Esa rasterización elimina también la capa OCR de dichas páginas, evitando que el texto redactado reaparezca en búsquedas.</p><p><b>Privacidad OCR:</b> el reconocimiento ocurre localmente. El primer uso puede requerir descargar los modelos de idioma de Tesseract.js; después el navegador puede reutilizar su caché.</p><p><b>Contenido original:</b> desde Analizar puedes convertir títulos, subtítulos, párrafos y otros bloques en objetos editables que se mueven y redimensionan sin revelar el texto original. Las imágenes originales pueden convertirse en objetos raster editables mientras su región original se elimina de forma segura al exportar.</p><p><b>Nota técnica:</b> el texto original se manipula mediante sustitución estructural visual; la reescritura directa de content streams y fuentes embebidas sigue siendo una línea futura para conservar tipografía compleja al 100%.</p></div><div className="modal-footer"><button className="button primary" onClick={()=>setShowInfo(false)}>Entendido</button></div></section></div>}
   </div>
 }

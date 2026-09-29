@@ -1,4 +1,4 @@
-# OpenPDF v0.5
+# OpenPDF v0.6
 
 Editor PDF local y gratuito construido con React + TypeScript + PDF.js + pdf-lib + Tesseract.js, preparado también para Tauri 2.
 
@@ -11,7 +11,7 @@ npm run dev
 
 Después abre la dirección que muestre Vite (normalmente `http://localhost:1420`).
 
-## Novedades de v0.5
+## Novedades de v0.6
 
 - OCR de la página actual o de todo el documento con Tesseract.js.
 - Español, inglés o español + inglés.
@@ -41,7 +41,7 @@ Después abre la dirección que muestre Vite (normalmente `http://localhost:1420
 
 ## Detección de tablas
 
-La v0.5 ya no depende únicamente de espacios grandes entre fragmentos. Ahora:
+La v0.6 ya no depende únicamente de espacios grandes entre fragmentos. Ahora:
 
 - agrupa elementos por líneas visuales;
 - fusiona palabras cercanas en una misma celda;
@@ -76,7 +76,7 @@ npm run tauri build
 ```
 
 
-## Novedades v0.5
+## Novedades v0.6
 
 - Navegación por rueda: desplázate dentro de la página y, al llegar arriba/abajo, pasa automáticamente a la página anterior/siguiente.
 - Page Up / Page Down, controles anterior/siguiente, salto directo a página y ajuste al ancho.
