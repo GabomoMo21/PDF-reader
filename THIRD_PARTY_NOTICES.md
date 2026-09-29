@@ -5,6 +5,7 @@ OpenPDF Editor is designed around open-source components. Before distributing a 
 - React / React DOM — MIT License
 - PDF.js (`pdfjs-dist`) — Apache License 2.0
 - pdf-lib — MIT License
+- Tesseract.js — Apache License 2.0
 - Tauri — MIT or Apache-2.0
 - Vite — MIT License
 

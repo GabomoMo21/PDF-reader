@@ -70,11 +70,23 @@ export type ReplaceTextAnnotation = {
 
 export type Annotation = TextAnnotation | StrokeAnnotation | RectangleAnnotation | ImageAnnotation | ChartAnnotation | ReplaceTextAnnotation
 
+export type OcrWord = {
+  id: string
+  text: string
+  x: number
+  y: number
+  width: number
+  height: number
+  confidence: number
+}
+
 export type PageState = {
   id: string
   sourceIndex: number
   rotationDelta: number
   annotations: Annotation[]
+  ocrWords?: OcrWord[]
+  ocrLanguage?: string
 }
 
 export type ExistingTextItem = {
@@ -85,6 +97,8 @@ export type ExistingTextItem = {
   width: number
   height: number
   fontSize: number
+  confidence?: number
+  source?: 'pdf' | 'ocr'
 }
 
 export type FormFieldInfo = {

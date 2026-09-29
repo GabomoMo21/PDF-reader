@@ -1,7 +1,7 @@
 {
   "name": "open-pdf-editor",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,7 +14,8 @@
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.4.149",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "tesseract.js": "^6.0.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.8.4",

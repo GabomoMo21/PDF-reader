@@ -1,6 +1,6 @@
-# OpenPDF v0.3
+# OpenPDF v0.4
 
-Editor PDF local y gratuito construido con React + TypeScript + PDF.js + pdf-lib, preparado también para Tauri 2.
+Editor PDF local y gratuito construido con React + TypeScript + PDF.js + pdf-lib + Tesseract.js, preparado también para Tauri 2.
 
 ## Ejecutar
 
@@ -11,40 +11,60 @@ npm run dev
 
 Después abre la dirección que muestre Vite (normalmente `http://localhost:1420`).
 
-## Novedades de v0.3
+## Novedades de v0.4
 
-- Selección de objetos con el cursor.
-- Arrastrar objetos insertados o editados.
-- Redimensionar imágenes, gráficos, resaltados, redacciones y texto reemplazado.
-- Eliminar objetos seleccionados con el botón contextual o `Delete/Supr`.
-- Undo/Redo real para cambios en páginas y objetos (`Ctrl+Z`, `Ctrl+Y`).
-- División del PDF por grupos de rangos, por ejemplo `1-3; 4-6; 8,10-12`.
-- Gráficos de barras, líneas y pastel a partir de datos pegados desde Excel/CSV.
-- Detección experimental de tablas/columnas en la página actual para precargar los datos del gráfico.
-- Redacción segura al exportar: las páginas que contienen zonas redactadas se rasterizan después de aplicar las ediciones, por lo que el contenido original situado debajo no se conserva en esas páginas del PDF final.
+- OCR de la página actual o de todo el documento con Tesseract.js.
+- Español, inglés o español + inglés.
+- El PDF no se envía a un servicio de OCR: el reconocimiento ocurre en el equipo. En el primer uso pueden descargarse los modelos de idioma de Tesseract.js.
+- Capa OCR guardada dentro del PDF para volver escaneos buscables/seleccionables.
+- Vista opcional de cajas OCR y confianza aproximada de cada palabra.
+- Corrección de palabras OCR con la herramienta **Editar texto**.
+- Detección de tablas mejorada usando alineación vertical y posiciones X recurrentes entre filas.
+- Detección desde texto PDF, desde OCR o selección automática de la fuente más útil.
+- Mini hoja de cálculo dentro del editor para corregir los datos detectados celda por celda.
+- Añadir/eliminar filas y columnas antes de crear el gráfico.
+- Gráficos de barras, líneas y pastel desde la tabla reconstruida.
+- Conserva las funciones de v0.3: selección y transformación de objetos, Undo/Redo, dividir, combinar, formularios, imágenes y redacción segura.
 
-## Importante sobre la redacción segura
+## Flujo recomendado para un PDF escaneado
 
-La seguridad se obtiene reconstruyendo como imagen las páginas que contienen redacciones. Esto elimina de esas páginas el texto y los objetos PDF subyacentes, pero también hace que el texto de esas páginas deje de ser seleccionable/buscable y que los elementos vectoriales se conviertan en píxeles.
+1. Abre el PDF.
+2. Pulsa **OCR**.
+3. Elige español, inglés o ambos.
+4. Ejecuta **OCR página** o **OCR documento**.
+5. Activa **Ver OCR** si quieres revisar visualmente las palabras reconocidas.
+6. Usa **Editar texto** para corregir palabras OCR equivocadas cuando la página no tenía texto nativo.
+7. Pulsa **Tabla / Gráfico** y luego **Desde OCR** para intentar reconstruir una tabla.
+8. Corrige las celdas en la mini hoja de cálculo.
+9. Inserta un gráfico si lo necesitas.
+10. Guarda el PDF para incluir la capa OCR.
 
-## Gráficos
+## Detección de tablas
 
-Pulsa **Gráfico** y pega una tabla como esta:
+La v0.4 ya no depende únicamente de espacios grandes entre fragmentos. Ahora:
 
-```text
-Mes\tVentas\tCostos
-Enero\t120\t80
-Febrero\t180\t105
-Marzo\t155\t95
-```
+- agrupa elementos por líneas visuales;
+- fusiona palabras cercanas en una misma celda;
+- busca coordenadas X que se repiten en varias filas;
+- usa esas coordenadas como anclas de columnas;
+- elimina columnas y filas demasiado vacías;
+- detecta filas numéricas y conserva una posible cabecera;
+- muestra una estimación de confianza;
+- permite corregir cada celda antes de usar los datos.
 
-También puedes copiar directamente un rango de Excel y pegarlo en el cuadro de datos. La primera columna se usa como categoría y las siguientes como series numéricas.
+No existe una estructura universal de “tabla” dentro de un PDF, así que documentos complejos todavía pueden requerir corrección manual.
 
-El botón **Detectar tabla de esta página** intenta agrupar texto por filas y columnas usando las coordenadas que entrega PDF.js. Es una heurística: funciona bien con tablas sencillas, pero debes revisar los datos antes de crear el gráfico.
+## OCR y privacidad
 
-## Limitación importante de edición de texto
+Tesseract.js realiza el reconocimiento en el navegador/app. El contenido de la página se procesa localmente. En el primer uso Tesseract.js puede necesitar descargar archivos de modelo del idioma; esto no implica subir el documento para reconocerlo.
 
-La edición de texto existente sigue funcionando como reemplazo visual del bloque detectado. Todavía no reconstruye el `content stream` ni hace reflow de párrafos como un procesador de texto. Esa será una fase posterior.
+## OCR y redacción segura
+
+La redacción segura tiene prioridad sobre la capa OCR. Las páginas que contienen redacciones se rasterizan al exportar, por lo que el texto que estaba debajo y cualquier capa OCR previa de esa página dejan de estar presentes como texto seleccionable. Esto evita que datos redactados reaparezcan al buscar o copiar.
+
+## Limitación de edición profunda
+
+La edición del texto vectorial original todavía funciona como reemplazo visual del bloque detectado. La siguiente fase grande del proyecto es reconstruir content streams, conservar fuentes incrustadas y permitir reflow real de párrafos.
 
 ## Build de escritorio con Tauri
 

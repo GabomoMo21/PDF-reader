@@ -87,6 +87,31 @@ export async function exportEditedPdf(source: Uint8Array, pages: PageState[], fo
         page.drawImage(image, { x:annotation.x*width, y:height-(annotation.y+annotation.height)*height, width:annotation.width*width, height:annotation.height*height })
       }
     }
+
+    // OCR layer: invisible text that keeps scanned pages searchable/selectable.
+    // Extremely low opacity avoids altering the page visually while preserving text objects.
+    if (state.ocrWords?.length) {
+      for (const word of state.ocrWords) {
+        if (!word.text.trim()) continue
+        const x = word.x * width
+        const boxHeight = Math.max(2, word.height * height)
+        const fontSize = Math.max(4, Math.min(72, boxHeight * 0.82))
+        const y = height - (word.y + word.height) * height + Math.max(0, (boxHeight - fontSize) * 0.5)
+        try {
+          page.drawText(word.text, {
+            x,
+            y,
+            size: fontSize,
+            font,
+            color: rgb(0, 0, 0),
+            opacity: 0.001,
+            maxWidth: Math.max(2, word.width * width * 1.35),
+          })
+        } catch {
+          // A malformed OCR token should not prevent the document from being saved.
+        }
+      }
+    }
   }
   return outputDoc.save()
 }
