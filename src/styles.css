@@ -1,0 +1,55 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #eceef2;
+  background: #101114;
+  font-synthesis: none;
+}
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+button { font: inherit; }
+.app-shell { height: 100vh; display: grid; grid-template-rows: 58px 1fr 30px; background: #121316; }
+.topbar { display: grid; grid-template-columns: 210px 1fr auto; align-items: center; gap: 18px; padding: 0 16px; border-bottom: 1px solid #2a2d33; background: #181a1f; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 720; }
+.brand-mark { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 8px; background: #f05a47; color: white; }
+.file-title { color: #aeb4c0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.top-actions { display: flex; gap: 8px; }
+.button, .toolbar button, .page-actions button { border: 1px solid #343841; color: #e8ebf0; background: #24272d; border-radius: 7px; cursor: pointer; }
+.button { padding: 8px 14px; }
+.button.primary { border-color: #ef6958; background: #ed5d49; color: white; }
+.button:disabled, .toolbar button:disabled { opacity: .4; cursor: default; }
+.workspace { min-height: 0; display: grid; grid-template-columns: 220px 1fr; }
+.sidebar { min-height: 0; display: grid; grid-template-rows: auto 1fr auto; padding: 12px 10px; border-right: 1px solid #292c32; background: #17191d; }
+.sidebar-title { padding: 4px 8px 10px; font-size: 12px; color: #8d94a0; text-transform: uppercase; letter-spacing: .08em; }
+.page-list { overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.page-item { display: flex; align-items: center; gap: 9px; width: 100%; padding: 9px 10px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #b8bec8; text-align: left; cursor: pointer; }
+.page-item:hover { background: #22252a; }
+.page-item.active { background: #2b2e35; border-color: #414650; color: white; }
+.page-icon { color: #8a919e; }
+.page-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; padding-top: 10px; }
+.page-actions button { height: 33px; }
+.main-area { min-width: 0; min-height: 0; display: grid; grid-template-rows: 48px 1fr; }
+.toolbar { display: flex; align-items: center; justify-content: center; gap: 6px; border-bottom: 1px solid #2a2d33; background: #1b1d22; }
+.toolbar button { padding: 6px 10px; }
+.toolbar button.active { border-color: #f27766; background: #3a2a29; }
+.divider { width: 1px; height: 24px; margin: 0 5px; background: #343840; }
+.zoom-label { width: 52px; text-align: center; color: #b2b8c3; font-size: 13px; }
+.document-stage { min-height: 0; overflow: auto; display: grid; place-items: start center; padding: 34px; background: #25282d; }
+.page-host { position: relative; background: white; box-shadow: 0 15px 45px rgba(0,0,0,.35); user-select: none; }
+.page-host canvas { display: block; position: absolute; inset: 0; }
+.annotation-layer, .text-layer-ui { position: absolute; inset: 0; width: 100%; height: 100%; color: #101216; pointer-events: none; }
+.text-layer-ui { overflow: hidden; }
+.annotation-layer .text-annotation { display: none; }
+.text-layer-ui polyline { display: none; }
+.text-annotation { position: absolute; color: #111318; line-height: 1; white-space: pre; transform-origin: top left; }
+.tool-text { cursor: text; }
+.tool-draw { cursor: crosshair; touch-action: none; }
+.drop-card { align-self: center; justify-self: center; width: min(430px, 80vw); padding: 48px 28px; display: flex; flex-direction: column; align-items: center; gap: 9px; border: 1px dashed #515661; border-radius: 16px; background: #1d2025; color: #dadde3; cursor: pointer; }
+.drop-card:hover { border-color: #ee6a58; background: #202329; }
+.drop-card span:last-child { color: #969daa; }
+.drop-icon { width: 58px; height: 58px; display: grid; place-items: center; border-radius: 12px; background: #e95f4d; color: white; font-weight: 800; font-size: 14px; }
+.statusbar { display: flex; justify-content: space-between; align-items: center; padding: 0 12px; border-top: 1px solid #292c32; background: #17191d; color: #858c98; font-size: 12px; }
+@media (max-width: 760px) {
+  .workspace { grid-template-columns: 150px 1fr; }
+  .topbar { grid-template-columns: 140px 1fr; }
+  .file-title { display: none; }
+}
